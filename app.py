@@ -1,10 +1,11 @@
+import re
 import streamlit as st
 import requests
 import pandas as pd
 
 st.set_page_config(page_title="Pipeline Dashboard", layout="wide")
 st.title("Partner Pipeline Intelligence Dashboard")
-st.caption("Data sources: ClinicalTrials.gov · PubMed · Europe PMC")
+st.caption("Data sources: ClinicalTrials.gov · PubMed · Europe PMC · SEC EDGAR")
 
 # ── Search inputs ──────────────────────────────────────
 st.subheader("Search")
@@ -40,15 +41,12 @@ with row2_col3:
 # ── CT.gov API ─────────────────────────────────────────
 def fetch_trials(sponsor, keyword, status):
     url = "https://clinicaltrials.gov/api/v2/studies"
-
-    # Sponsor + keyword AND 조합
     terms = []
     if sponsor:
         terms.append(sponsor)
     if keyword:
         terms.append(keyword)
     query_term = " AND ".join(terms) if terms else ""
-
     params = {
         "query.term": query_term,
         "pageSize": 50,
@@ -61,7 +59,6 @@ def fetch_trials(sponsor, keyword, status):
     }
     if status != "All":
         params["filter.overallStatus"] = status
-
     try:
         r = requests.get(url, params=params, timeout=10)
         r.raise_for_status()
@@ -128,7 +125,7 @@ def search_europepmc(nct_id):
     except:
         return []
 
-# ── Merge & deduplicate ────────────────────────────────
+# ── Merge & deduplicate papers ─────────────────────────
 def get_all_papers(nct_id):
     seen, merged = set(), []
     for p in search_pubmed(nct_id) + search_europepmc(nct_id):
@@ -138,20 +135,13 @@ def get_all_papers(nct_id):
             merged.append(p)
     return merged
 
-# ── EDGAR API ──────────────────────────────────────────
+# ── EDGAR: CIK 조회 ────────────────────────────────────
 def get_cik(sponsor_name):
-    """
-    EDGAR company search API로 Sponsor명 → CIK 변환.
-    가장 유사한 회사 1개의 (cik, name) 반환.
-    """
-    headers = {"User-Agent": "pipeline-dashboard hyesun116@gmail.com"}
+    headers = {"User-Agent": "pipeline-dashboard your@email.com"}
     try:
         r = requests.get(
             "https://efts.sec.gov/LATEST/search-index",
-            params={
-                "q":      f'"{sponsor_name}"',
-                "forms":  "10-K",
-            },
+            params={"q": f'"{sponsor_name}"', "forms": "10-K"},
             headers=headers,
             timeout=8
         )
@@ -162,61 +152,33 @@ def get_cik(sponsor_name):
             names     = src.get("display_names", [])
             name      = names[0] if names else ""
             if entity_id:
-                # CIK는 10자리 zero-padding 필요
-                cik_padded = str(entity_id).zfill(10)
-                return cik_padded, name
+                return str(entity_id).zfill(10), name
     except:
         pass
-
-    # fallback: company search API
     try:
         r = requests.get(
             "https://www.sec.gov/cgi-bin/browse-edgar",
             params={
-                "company":  sponsor_name,
-                "CIK":      "",
-                "type":     "10-K",
-                "dateb":    "",
-                "owner":    "include",
-                "count":    "5",
-                "search_text": "",
-                "action":   "getcompany",
-                "output":   "atom"
+                "company": sponsor_name, "CIK": "", "type": "10-K",
+                "dateb": "", "owner": "include", "count": "5",
+                "search_text": "", "action": "getcompany", "output": "atom"
             },
             headers=headers,
             timeout=8
         )
-        # atom XML에서 CIK 파싱
-        import re
-        ciks = re.findall(r'CIK=(\d+)', r.text)
+        ciks        = re.findall(r'CIK=(\d+)', r.text)
         names_found = re.findall(r'<company-name>(.*?)</company-name>', r.text)
         if ciks:
-            cik_padded = ciks[0].zfill(10)
-            name = names_found[0] if names_found else sponsor_name
-            return cik_padded, name
+            return ciks[0].zfill(10), (names_found[0] if names_found else sponsor_name)
     except:
         pass
-
     return None, None
 
-
+# ── EDGAR: 공시 검색 ───────────────────────────────────
 def fetch_edgar_filings(sponsor_name, drug_name, filing_types=["8-K", "10-K"], max_results=5):
-    """
-    1) Sponsor CIK 확정
-    2) EDGAR full-text search: CIK 회사 제출 문서 중 drug_name 언급 건
-    3) 문서별 직접 링크 반환
-    """
-    headers = {"User-Agent": "pipeline-dashboard hyesun116@gmail.com"}
-
-    # Step 1: CIK 확정
+    headers    = {"User-Agent": "pipeline-dashboard your@email.com"}
     cik, entity_display = get_cik(sponsor_name)
-
-    # Step 2: full-text search
-    # 올바른 EDGAR full-text search 엔드포인트
-    search_url = "https://efts.sec.gov/LATEST/search-index"
-
     query_term = f'"{drug_name}"' if drug_name else f'"{sponsor_name}"'
-
     params = {
         "q":         query_term,
         "forms":     ",".join(filing_types),
@@ -224,46 +186,36 @@ def fetch_edgar_filings(sponsor_name, drug_name, filing_types=["8-K", "10-K"], m
         "startdt":   "2020-01-01",
     }
     if cik:
-        params["entity"] = sponsor_name  # entity 필터로 해당 회사만
-
+        params["entity"] = sponsor_name
     try:
-        r = requests.get(search_url, params=params, headers=headers, timeout=10)
+        r = requests.get(
+            "https://efts.sec.gov/LATEST/search-index",
+            params=params, headers=headers, timeout=10
+        )
         r.raise_for_status()
         hits = r.json().get("hits", {}).get("hits", [])
-    except Exception as e:
+    except:
         return [], entity_display
 
-    filings = []
-    seen = set()
-
+    filings, seen = [], set()
     for hit in hits:
-        src       = hit.get("_source", {})
-        form      = src.get("form_type", "")
-        filed     = src.get("file_date", "")
-        accession = src.get("accession_no", "")   # 예: 0001234567-24-000123
-        hit_cik   = str(src.get("entity_id", "")).zfill(10)
-        names     = src.get("display_names", [])
-        entity    = names[0] if names else sponsor_name
-        period    = src.get("period_of_report", "")
+        src             = hit.get("_source", {})
+        form            = src.get("form_type", "")
+        filed           = src.get("file_date", "")
+        accession       = src.get("accession_no", "")
+        hit_cik         = str(src.get("entity_id", "")).zfill(10)
+        names           = src.get("display_names", [])
+        entity          = names[0] if names else sponsor_name
+        period          = src.get("period_of_report", "")
 
         if not accession or accession in seen:
             continue
         seen.add(accession)
-
-        # CIK 필터: get_cik로 찾은 회사 문서만 포함
         if cik and hit_cik and hit_cik != cik:
             continue
 
-        # 직접 문서 뷰어 URL 생성
-        # EDGAR 문서 인덱스 URL 형식: /Archives/edgar/data/{CIK}/{accession}/
         accession_nodash = accession.replace("-", "")
         if hit_cik and accession_nodash:
-            direct_url = (
-                f"https://www.sec.gov/cgi-bin/browse-edgar"
-                f"?action=getcompany&CIK={hit_cik}"
-                f"&type={form}&dateb=&owner=include&count=40"
-            )
-            # 더 직접적인 개별 filing 인덱스
             viewer_url = (
                 f"https://www.sec.gov/Archives/edgar/data/"
                 f"{int(hit_cik)}/{accession_nodash}/{accession}-index.htm"
@@ -281,7 +233,6 @@ def fetch_edgar_filings(sponsor_name, drug_name, filing_types=["8-K", "10-K"], m
             "Period": period,
             "url":    viewer_url,
         })
-
         if len(filings) >= max_results:
             break
 
@@ -360,8 +311,8 @@ if search_btn:
         if not studies:
             st.warning("No results found. Try a different keyword.")
         else:
-            rows = parse_trials(studies)
-            rows = apply_phase_filter(rows, phase_filter)
+            rows  = parse_trials(studies)
+            rows  = apply_phase_filter(rows, phase_filter)
             total = len(rows)
 
             progress = st.progress(0, text="Matching publications...")
@@ -390,15 +341,6 @@ if search_btn:
 
             # ── Pipeline table ─────────────────────────
             st.subheader("Pipeline Overview")
-
-            display_cols = [
-                "NCT#", "Lead Sponsor", "Collaborators",
-                "Drug", "Indication", "Phase", "Status",
-                "Completion", "Confidence", "Pubs", "Pub Sources"
-            ]
-            df = pd.DataFrame(rows)[display_cols]
-
-            # NCT# 컬럼을 클릭 가능한 링크로 변환
             df_linked = pd.DataFrame(rows)[[
                 "NCT#", "Lead Sponsor", "Collaborators",
                 "Drug", "Indication", "Phase", "Status",
@@ -410,8 +352,7 @@ if search_btn:
                 hide_index=True,
                 column_config={
                     "CT.gov Link": st.column_config.LinkColumn(
-                        "CT.gov",
-                        display_text="Open ↗"
+                        "CT.gov", display_text="Open ↗"
                     )
                 }
             )
@@ -422,8 +363,7 @@ if search_btn:
 
             for row in rows:
                 header = (
-                    f"{row['NCT#']} · "
-                    f"{row['Lead Sponsor']} · "
+                    f"{row['NCT#']} · {row['Lead Sponsor']} · "
                     f"{row['Drug'] or '—'} · "
                     f"{row['Indication'][:30] or '—'} · "
                     f"{row['Confidence']}"
@@ -439,7 +379,6 @@ if search_btn:
                         st.caption(f"**Trial Title:** {row['Trial Title']}")
                         st.markdown(f"[View on CT.gov ↗]({row['CT.gov Link']})")
 
-                    # ── Publications ───────────────────
                     st.write("")
                     st.markdown("**Publications**")
                     if row["papers"]:
@@ -450,37 +389,58 @@ if search_btn:
                     else:
                         st.caption("No publications found in PubMed or Europe PMC.")
 
-                    # ── SEC Filings ─────────────────────
-                    st.write("")
-                    st.markdown("**SEC Filings (EDGAR)**")
-                    filings = get_edgar_filings(row["Lead Sponsor"])
-                    if filings:
-                        for f in filings:
-                            label = f"{f['form']} · {f['filed']} · {f['description'][:60]}"
-                            st.markdown(f"- [{label}]({f['url']})")
-                    else:
-                        edgar_fallback = (
-                            "https://www.sec.gov/cgi-bin/browse-edgar"
-                            f"?action=getcompany&company={requests.utils.quote(row['Lead Sponsor'])}"
-                            "&type=8-K&dateb=&owner=include&count=10"
-                        )
-                        st.caption("No filings auto-matched.")
-                        st.markdown(f"[Search {row['Lead Sponsor']} on EDGAR ↗]({edgar_fallback})")
+            # ── SEC Filings (Sponsor 단위, 1회만 호출) ──
+            st.divider()
+            st.subheader("Recent SEC Filings")
 
-            # filings가 비어있거나 불안정할 때 fallback 링크 제공
-edgar_search_link = (
-    f"https://efts.sec.gov/LATEST/search-index"
-    f"?q=%22{requests.utils.quote(edgar_drug or edgar_sponsor)}%22"
-    f"&entity={requests.utils.quote(edgar_sponsor)}"
-    f"&forms=8-K,10-K"
-    f"&dateRange=custom&startdt=2020-01-01"
-)
-st.markdown(
-    f"Direct EDGAR search → "
-    f"[{edgar_sponsor} · {edgar_drug or 'all filings'}]({edgar_search_link})"
-)
-            
+            edgar_sponsor = sponsor_input if sponsor_input else keyword_input
+            edgar_drug    = keyword_input  if keyword_input  else ""
+
+            st.caption(
+                f"Searching EDGAR for **{edgar_sponsor}** filings"
+                + (f" mentioning **{edgar_drug}**" if edgar_drug else "")
+                + " · Filing types: 8-K, 10-K"
+            )
+
+            with st.spinner("Fetching SEC filings from EDGAR..."):
+                filings, entity_display = fetch_edgar_filings(edgar_sponsor, edgar_drug)
+
+            if entity_display:
+                st.caption(f"EDGAR matched entity: **{entity_display}**")
+
+            if filings:
+                df_filings = pd.DataFrame(filings)[["Form", "Filed", "Entity", "Period", "url"]]
+                st.dataframe(
+                    df_filings,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "url": st.column_config.LinkColumn(
+                            "EDGAR Filing", display_text="Open ↗"
+                        )
+                    }
+                )
+            else:
+                st.caption("No filings auto-matched.")
+
+            # fallback: 직접 검색 링크 항상 표시
+            edgar_fallback = (
+                f"https://efts.sec.gov/LATEST/search-index"
+                f"?q=%22{requests.utils.quote(edgar_drug or edgar_sponsor)}%22"
+                f"&entity={requests.utils.quote(edgar_sponsor)}"
+                f"&forms=8-K,10-K&dateRange=custom&startdt=2020-01-01"
+            )
+            st.markdown(
+                f"Direct EDGAR search → "
+                f"[{edgar_sponsor} · {edgar_drug or 'all filings'}]({edgar_fallback})"
+            )
+
             # ── CSV export ─────────────────────────────
-            csv = df.to_csv(index=False).encode("utf-8-sig")
+            df_export = pd.DataFrame(rows)[[
+                "NCT#", "Lead Sponsor", "Collaborators",
+                "Drug", "Indication", "Phase", "Status",
+                "Completion", "Confidence", "Pubs", "Pub Sources", "CT.gov Link"
+            ]]
+            csv   = df_export.to_csv(index=False).encode("utf-8-sig")
             label = sponsor_input or keyword_input
             st.download_button("Export CSV", csv, f"{label}_pipeline.csv", "text/csv")

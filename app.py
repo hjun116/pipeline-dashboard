@@ -138,6 +138,63 @@ def get_all_papers(nct_id):
             merged.append(p)
     return merged
 
+# ── EDGAR SEC filings ──────────────────────────────────
+@st.cache_data(ttl=3600)
+def get_edgar_filings(sponsor_name, max_results=5):
+    """Sponsor명으로 EDGAR에서 최근 8-K / 10-K 공시 검색."""
+    # 1단계: 회사 CIK 번호 검색
+    try:
+        search_r = requests.get(
+            "https://efts.sec.gov/LATEST/search-index?q=%22"
+            + requests.utils.quote(sponsor_name)
+            + "%22&dateRange=custom&startdt=2022-01-01&forms=8-K,10-K",
+            headers={"User-Agent": "pipeline-dashboard research@example.com"},
+            timeout=10
+        )
+        # EDGAR full-text search API 사용
+        r = requests.get(
+            "https://efts.sec.gov/LATEST/search-index",
+            params={
+                "q": f'"{sponsor_name}"',
+                "forms": "8-K,10-K",
+                "dateRange": "custom",
+                "startdt": "2023-01-01",
+            },
+            headers={"User-Agent": "pipeline-dashboard research@example.com"},
+            timeout=10
+        )
+    except:
+        pass
+
+    # EDGAR full-text search (공식 엔드포인트)
+    try:
+        r = requests.get(
+            "https://efts.sec.gov/LATEST/search-index",
+            params={
+                "q": f'"{sponsor_name}"',
+                "forms": "8-K,10-K",
+                "dateRange": "custom",
+                "startdt": "2023-01-01",
+            },
+            headers={"User-Agent": "pipeline-dashboard research@example.com"},
+            timeout=10
+        )
+        hits = r.json().get("hits", {}).get("hits", [])
+        filings = []
+        for h in hits[:max_results]:
+            src = h.get("_source", {})
+            filings.append({
+                "form":        src.get("form_type", ""),
+                "filed":       src.get("file_date", ""),
+                "description": src.get("display_names", [src.get("entity_name", "")])[0] if src.get("display_names") else src.get("entity_name", ""),
+                "url":         "https://www.sec.gov/Archives/" + src.get("file_path", "")
+                               if src.get("file_path") else
+                               f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={requests.utils.quote(sponsor_name)}&type=8-K&dateb=&owner=include&count=10",
+            })
+        return filings
+    except:
+        return []
+
 # ── Confidence scoring ─────────────────────────────────
 def get_confidence(papers, status):
     n = len(papers)

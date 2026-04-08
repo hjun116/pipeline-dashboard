@@ -148,7 +148,7 @@ def get_edgar_filings(sponsor_name, max_results=5):
             "https://efts.sec.gov/LATEST/search-index?q=%22"
             + requests.utils.quote(sponsor_name)
             + "%22&dateRange=custom&startdt=2022-01-01&forms=8-K,10-K",
-            headers={"User-Agent": "pipeline-dashboard research@example.com"},
+            headers={"User-Agent": "pipeline-dashboard hyesun116@gmail.com"},
             timeout=10
         )
         # EDGAR full-text search API 사용
@@ -160,7 +160,7 @@ def get_edgar_filings(sponsor_name, max_results=5):
                 "dateRange": "custom",
                 "startdt": "2023-01-01",
             },
-            headers={"User-Agent": "pipeline-dashboard research@example.com"},
+            headers={"User-Agent": "pipeline-dashboard hyesun116@gmail.com"},
             timeout=10
         )
     except:
@@ -176,7 +176,7 @@ def get_edgar_filings(sponsor_name, max_results=5):
                 "dateRange": "custom",
                 "startdt": "2023-01-01",
             },
-            headers={"User-Agent": "pipeline-dashboard research@example.com"},
+            headers={"User-Agent": "pipeline-dashboard hyesun116@gmail.com"},
             timeout=10
         )
         hits = r.json().get("hits", {}).get("hits", [])

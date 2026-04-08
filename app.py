@@ -137,7 +137,7 @@ def get_all_papers(nct_id):
 
 # ── EDGAR: CIK 조회 ────────────────────────────────────
 def get_cik(sponsor_name):
-    headers = {"User-Agent": "pipeline-dashboard your@email.com"}
+    headers = {"User-Agent": "pipeline-dashboard hyesun116@gmail.com"}
     try:
         r = requests.get(
             "https://efts.sec.gov/LATEST/search-index",
@@ -176,7 +176,7 @@ def get_cik(sponsor_name):
 
 # ── EDGAR: 공시 검색 ───────────────────────────────────
 def fetch_edgar_filings(sponsor_name, drug_name, filing_types=["8-K", "10-K"], max_results=5):
-    headers    = {"User-Agent": "pipeline-dashboard your@email.com"}
+    headers    = {"User-Agent": "pipeline-dashboard hyesun@gmail.com"}
     cik, entity_display = get_cik(sponsor_name)
     query_term = f'"{drug_name}"' if drug_name else f'"{sponsor_name}"'
     params = {

@@ -1,6 +1,8 @@
 import streamlit as st
 import requests
 import pandas as pd
+from datetime import date, timedelta
+
 
 st.set_page_config(page_title="Pipeline Dashboard", layout="wide")
 st.title("Partner Pipeline Intelligence Dashboard")
@@ -21,7 +23,14 @@ with row1_col2:
         placeholder="e.g. nivolumab, NSCLC, PD-1"
     )
 
-row2_col1, row2_col2, row2_col3 = st.columns([1, 1, 1])
+# Period
+st.info(
+    "**Tip:** Narrowing the date range speeds up results significantly. "
+    "For most BD workflows, the last 3–5 years covers active and recently completed trials. "
+    "Searching 10+ years may be slow due to publication matching across all sources."
+)
+
+row2_col1, row2_col2, row2_col3, row2_col4, row2_col5 = st.columns([1, 1, 1, 1, 1])
 with row2_col1:
     phase_filter = st.selectbox(
         "Phase",
@@ -33,12 +42,26 @@ with row2_col2:
         ["All", "RECRUITING", "ACTIVE_NOT_RECRUITING", "COMPLETED", "TERMINATED"]
     )
 with row2_col3:
+    date_from = st.date_input(
+        "Start date (primary completion)",
+        value=date.today() - timedelta(days=365 * 5),  # 기본값: 5년 전
+        min_value=date(2000, 1, 1),
+        max_value=date.today(),
+    )
+with row2_col4:
+    date_to = st.date_input(
+        "End date (primary completion)",
+        value=date.today(),
+        min_value=date(2000, 1, 1),
+        max_value=date(2030, 12, 31),
+    )
+with row2_col5:
     st.write("")
     st.write("")
     search_btn = st.button("Search", type="primary", use_container_width=True)
 
 # ── CT.gov API ─────────────────────────────────────────
-def fetch_trials(sponsor, keyword, status):
+def fetch_trials(sponsor, keyword, status, date_from, date_to):
     url = "https://clinicaltrials.gov/api/v2/studies"
     terms = []
     if sponsor:
@@ -54,6 +77,10 @@ def fetch_trials(sponsor, keyword, status):
             "NCTId,BriefTitle,OverallStatus,Phase,Condition,"
             "InterventionName,PrimaryCompletionDate,"
             "LeadSponsorName,CollaboratorName"
+        ),
+        "filter.advanced": (
+            f"AREA[PrimaryCompletionDate]RANGE[{date_from.strftime('%Y-%m-%d')},"
+            f"{date_to.strftime('%Y-%m-%d')}]"
         )
     }
     if status != "All":
@@ -348,7 +375,7 @@ if search_btn:
         st.warning("Please enter a sponsor name or keyword.")
     else:
         with st.spinner("Querying ClinicalTrials.gov..."):
-            studies = fetch_trials(sponsor_input, keyword_input, status_filter)
+            studies = fetch_trials(sponsor_input, keyword_input, status_filter, date_from, date_to)
 
         if not studies:
             st.warning("No results found. Try a different keyword.")

@@ -138,62 +138,154 @@ def get_all_papers(nct_id):
             merged.append(p)
     return merged
 
-# ── EDGAR SEC filings ──────────────────────────────────
-@st.cache_data(ttl=3600)
-def get_edgar_filings(sponsor_name, max_results=5):
-    """Sponsor명으로 EDGAR에서 최근 8-K / 10-K 공시 검색."""
-    # 1단계: 회사 CIK 번호 검색
+# ── EDGAR API ──────────────────────────────────────────
+def get_cik(sponsor_name):
+    """
+    EDGAR company search API로 Sponsor명 → CIK 변환.
+    가장 유사한 회사 1개의 (cik, name) 반환.
+    """
+    headers = {"User-Agent": "pipeline-dashboard your@email.com"}
     try:
-        search_r = requests.get(
-            "https://efts.sec.gov/LATEST/search-index?q=%22"
-            + requests.utils.quote(sponsor_name)
-            + "%22&dateRange=custom&startdt=2022-01-01&forms=8-K,10-K",
-            headers={"User-Agent": "pipeline-dashboard hyesun116@gmail.com"},
-            timeout=10
-        )
-        # EDGAR full-text search API 사용
         r = requests.get(
             "https://efts.sec.gov/LATEST/search-index",
             params={
-                "q": f'"{sponsor_name}"',
-                "forms": "8-K,10-K",
-                "dateRange": "custom",
-                "startdt": "2023-01-01",
+                "q":      f'"{sponsor_name}"',
+                "forms":  "10-K",
             },
-            headers={"User-Agent": "pipeline-dashboard hyesun116@gmail.com"},
-            timeout=10
+            headers=headers,
+            timeout=8
         )
+        hits = r.json().get("hits", {}).get("hits", [])
+        for hit in hits:
+            src       = hit.get("_source", {})
+            entity_id = src.get("entity_id", "")
+            names     = src.get("display_names", [])
+            name      = names[0] if names else ""
+            if entity_id:
+                # CIK는 10자리 zero-padding 필요
+                cik_padded = str(entity_id).zfill(10)
+                return cik_padded, name
     except:
         pass
 
-    # EDGAR full-text search (공식 엔드포인트)
+    # fallback: company search API
     try:
         r = requests.get(
-            "https://efts.sec.gov/LATEST/search-index",
+            "https://www.sec.gov/cgi-bin/browse-edgar",
             params={
-                "q": f'"{sponsor_name}"',
-                "forms": "8-K,10-K",
-                "dateRange": "custom",
-                "startdt": "2023-01-01",
+                "company":  sponsor_name,
+                "CIK":      "",
+                "type":     "10-K",
+                "dateb":    "",
+                "owner":    "include",
+                "count":    "5",
+                "search_text": "",
+                "action":   "getcompany",
+                "output":   "atom"
             },
-            headers={"User-Agent": "pipeline-dashboard hyesun116@gmail.com"},
-            timeout=10
+            headers=headers,
+            timeout=8
         )
-        hits = r.json().get("hits", {}).get("hits", [])
-        filings = []
-        for h in hits[:max_results]:
-            src = h.get("_source", {})
-            filings.append({
-                "form":        src.get("form_type", ""),
-                "filed":       src.get("file_date", ""),
-                "description": src.get("display_names", [src.get("entity_name", "")])[0] if src.get("display_names") else src.get("entity_name", ""),
-                "url":         "https://www.sec.gov/Archives/" + src.get("file_path", "")
-                               if src.get("file_path") else
-                               f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={requests.utils.quote(sponsor_name)}&type=8-K&dateb=&owner=include&count=10",
-            })
-        return filings
+        # atom XML에서 CIK 파싱
+        import re
+        ciks = re.findall(r'CIK=(\d+)', r.text)
+        names_found = re.findall(r'<company-name>(.*?)</company-name>', r.text)
+        if ciks:
+            cik_padded = ciks[0].zfill(10)
+            name = names_found[0] if names_found else sponsor_name
+            return cik_padded, name
     except:
-        return []
+        pass
+
+    return None, None
+
+
+def fetch_edgar_filings(sponsor_name, drug_name, filing_types=["8-K", "10-K"], max_results=5):
+    """
+    1) Sponsor CIK 확정
+    2) EDGAR full-text search: CIK 회사 제출 문서 중 drug_name 언급 건
+    3) 문서별 직접 링크 반환
+    """
+    headers = {"User-Agent": "pipeline-dashboard your@email.com"}
+
+    # Step 1: CIK 확정
+    cik, entity_display = get_cik(sponsor_name)
+
+    # Step 2: full-text search
+    # 올바른 EDGAR full-text search 엔드포인트
+    search_url = "https://efts.sec.gov/LATEST/search-index"
+
+    query_term = f'"{drug_name}"' if drug_name else f'"{sponsor_name}"'
+
+    params = {
+        "q":         query_term,
+        "forms":     ",".join(filing_types),
+        "dateRange": "custom",
+        "startdt":   "2020-01-01",
+    }
+    if cik:
+        params["entity"] = sponsor_name  # entity 필터로 해당 회사만
+
+    try:
+        r = requests.get(search_url, params=params, headers=headers, timeout=10)
+        r.raise_for_status()
+        hits = r.json().get("hits", {}).get("hits", [])
+    except Exception as e:
+        return [], entity_display
+
+    filings = []
+    seen = set()
+
+    for hit in hits:
+        src       = hit.get("_source", {})
+        form      = src.get("form_type", "")
+        filed     = src.get("file_date", "")
+        accession = src.get("accession_no", "")   # 예: 0001234567-24-000123
+        hit_cik   = str(src.get("entity_id", "")).zfill(10)
+        names     = src.get("display_names", [])
+        entity    = names[0] if names else sponsor_name
+        period    = src.get("period_of_report", "")
+
+        if not accession or accession in seen:
+            continue
+        seen.add(accession)
+
+        # CIK 필터: get_cik로 찾은 회사 문서만 포함
+        if cik and hit_cik and hit_cik != cik:
+            continue
+
+        # 직접 문서 뷰어 URL 생성
+        # EDGAR 문서 인덱스 URL 형식: /Archives/edgar/data/{CIK}/{accession}/
+        accession_nodash = accession.replace("-", "")
+        if hit_cik and accession_nodash:
+            direct_url = (
+                f"https://www.sec.gov/cgi-bin/browse-edgar"
+                f"?action=getcompany&CIK={hit_cik}"
+                f"&type={form}&dateb=&owner=include&count=40"
+            )
+            # 더 직접적인 개별 filing 인덱스
+            viewer_url = (
+                f"https://www.sec.gov/Archives/edgar/data/"
+                f"{int(hit_cik)}/{accession_nodash}/{accession}-index.htm"
+            )
+        else:
+            viewer_url = (
+                f"https://efts.sec.gov/LATEST/search-index"
+                f"?q={requests.utils.quote(query_term)}&forms={form}"
+            )
+
+        filings.append({
+            "Form":   form,
+            "Filed":  filed,
+            "Entity": entity[:50],
+            "Period": period,
+            "url":    viewer_url,
+        })
+
+        if len(filings) >= max_results:
+            break
+
+    return filings, entity_display
 
 # ── Confidence scoring ─────────────────────────────────
 def get_confidence(papers, status):

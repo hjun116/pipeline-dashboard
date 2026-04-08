@@ -154,7 +154,7 @@ def search_openalex(nct_id):
                 "per_page":   5,
                 "select":     "id,title,doi,pmid,primary_location",
             },
-            headers={"User-Agent": "pipeline-dashboard your@email.com"},
+            headers={"User-Agent": "pipeline-dashboard hyesun116@gmail.com"},
             timeout=8
         )
         results = r.json().get("results", [])
@@ -168,7 +168,7 @@ def search_openalex(nct_id):
                     "per_page": 5,
                     "select":   "id,title,doi,pmid,primary_location",
                 },
-                headers={"User-Agent": "pipeline-dashboard your@email.com"},
+                headers={"User-Agent": "pipeline-dashboard hyesun116@gmail.com"},
                 timeout=8
             )
             results = r2.json().get("results", [])

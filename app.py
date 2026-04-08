@@ -1,11 +1,10 @@
-import re
 import streamlit as st
 import requests
 import pandas as pd
 
 st.set_page_config(page_title="Pipeline Dashboard", layout="wide")
 st.title("Partner Pipeline Intelligence Dashboard")
-st.caption("Data sources: ClinicalTrials.gov · PubMed · Europe PMC · SEC EDGAR")
+st.caption("Data sources: ClinicalTrials.gov · PubMed · Europe PMC")
 
 # ── Search inputs ──────────────────────────────────────
 st.subheader("Search")
@@ -134,109 +133,6 @@ def get_all_papers(nct_id):
             seen.add(key)
             merged.append(p)
     return merged
-
-# ── EDGAR: CIK 조회 ────────────────────────────────────
-def get_cik(sponsor_name):
-    headers = {"User-Agent": "pipeline-dashboard hyesun116@gmail.com"}
-    try:
-        r = requests.get(
-            "https://efts.sec.gov/LATEST/search-index",
-            params={"q": f'"{sponsor_name}"', "forms": "10-K"},
-            headers=headers,
-            timeout=8
-        )
-        hits = r.json().get("hits", {}).get("hits", [])
-        for hit in hits:
-            src       = hit.get("_source", {})
-            entity_id = src.get("entity_id", "")
-            names     = src.get("display_names", [])
-            name      = names[0] if names else ""
-            if entity_id:
-                return str(entity_id).zfill(10), name
-    except:
-        pass
-    try:
-        r = requests.get(
-            "https://www.sec.gov/cgi-bin/browse-edgar",
-            params={
-                "company": sponsor_name, "CIK": "", "type": "10-K",
-                "dateb": "", "owner": "include", "count": "5",
-                "search_text": "", "action": "getcompany", "output": "atom"
-            },
-            headers=headers,
-            timeout=8
-        )
-        ciks        = re.findall(r'CIK=(\d+)', r.text)
-        names_found = re.findall(r'<company-name>(.*?)</company-name>', r.text)
-        if ciks:
-            return ciks[0].zfill(10), (names_found[0] if names_found else sponsor_name)
-    except:
-        pass
-    return None, None
-
-# ── EDGAR: 공시 검색 ───────────────────────────────────
-def fetch_edgar_filings(sponsor_name, drug_name, filing_types=["8-K", "10-K"], max_results=5):
-    headers    = {"User-Agent": "pipeline-dashboard hyesun@gmail.com"}
-    cik, entity_display = get_cik(sponsor_name)
-    query_term = f'"{drug_name}"' if drug_name else f'"{sponsor_name}"'
-    params = {
-        "q":         query_term,
-        "forms":     ",".join(filing_types),
-        "dateRange": "custom",
-        "startdt":   "2020-01-01",
-    }
-    if cik:
-        params["entity"] = sponsor_name
-    try:
-        r = requests.get(
-            "https://efts.sec.gov/LATEST/search-index",
-            params=params, headers=headers, timeout=10
-        )
-        r.raise_for_status()
-        hits = r.json().get("hits", {}).get("hits", [])
-    except:
-        return [], entity_display
-
-    filings, seen = [], set()
-    for hit in hits:
-        src             = hit.get("_source", {})
-        form            = src.get("form_type", "")
-        filed           = src.get("file_date", "")
-        accession       = src.get("accession_no", "")
-        hit_cik         = str(src.get("entity_id", "")).zfill(10)
-        names           = src.get("display_names", [])
-        entity          = names[0] if names else sponsor_name
-        period          = src.get("period_of_report", "")
-
-        if not accession or accession in seen:
-            continue
-        seen.add(accession)
-        if cik and hit_cik and hit_cik != cik:
-            continue
-
-        accession_nodash = accession.replace("-", "")
-        if hit_cik and accession_nodash:
-            viewer_url = (
-                f"https://www.sec.gov/Archives/edgar/data/"
-                f"{int(hit_cik)}/{accession_nodash}/{accession}-index.htm"
-            )
-        else:
-            viewer_url = (
-                f"https://efts.sec.gov/LATEST/search-index"
-                f"?q={requests.utils.quote(query_term)}&forms={form}"
-            )
-
-        filings.append({
-            "Form":   form,
-            "Filed":  filed,
-            "Entity": entity[:50],
-            "Period": period,
-            "url":    viewer_url,
-        })
-        if len(filings) >= max_results:
-            break
-
-    return filings, entity_display
 
 # ── Confidence scoring ─────────────────────────────────
 def get_confidence(papers, status):
@@ -388,52 +284,6 @@ if search_btn:
                             )
                     else:
                         st.caption("No publications found in PubMed or Europe PMC.")
-
-            # ── SEC Filings (Sponsor 단위, 1회만 호출) ──
-            st.divider()
-            st.subheader("Recent SEC Filings")
-
-            edgar_sponsor = sponsor_input if sponsor_input else keyword_input
-            edgar_drug    = keyword_input  if keyword_input  else ""
-
-            st.caption(
-                f"Searching EDGAR for **{edgar_sponsor}** filings"
-                + (f" mentioning **{edgar_drug}**" if edgar_drug else "")
-                + " · Filing types: 8-K, 10-K"
-            )
-
-            with st.spinner("Fetching SEC filings from EDGAR..."):
-                filings, entity_display = fetch_edgar_filings(edgar_sponsor, edgar_drug)
-
-            if entity_display:
-                st.caption(f"EDGAR matched entity: **{entity_display}**")
-
-            if filings:
-                df_filings = pd.DataFrame(filings)[["Form", "Filed", "Entity", "Period", "url"]]
-                st.dataframe(
-                    df_filings,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "url": st.column_config.LinkColumn(
-                            "EDGAR Filing", display_text="Open ↗"
-                        )
-                    }
-                )
-            else:
-                st.caption("No filings auto-matched.")
-
-            # fallback: 직접 검색 링크 항상 표시
-            edgar_fallback = (
-                f"https://efts.sec.gov/LATEST/search-index"
-                f"?q=%22{requests.utils.quote(edgar_drug or edgar_sponsor)}%22"
-                f"&entity={requests.utils.quote(edgar_sponsor)}"
-                f"&forms=8-K,10-K&dateRange=custom&startdt=2020-01-01"
-            )
-            st.markdown(
-                f"Direct EDGAR search → "
-                f"[{edgar_sponsor} · {edgar_drug or 'all filings'}]({edgar_fallback})"
-            )
 
             # ── CSV export ─────────────────────────────
             df_export = pd.DataFrame(rows)[[

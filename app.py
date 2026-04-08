@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 
 st.set_page_config(page_title="Pipeline Dashboard", layout="wide")
-st.title("Partner Pipeline Intelligence Dashboard")
+st.title("Partner Pipeline Development Status Dashboard")
 st.caption("Data sources: ClinicalTrials.gov · PubMed · Europe PMC")
 
 # ── Search inputs ──────────────────────────────────────

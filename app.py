@@ -3,8 +3,8 @@ import requests
 import pandas as pd
 
 st.set_page_config(page_title="Pipeline Dashboard", layout="wide")
-st.title("Partner Pipeline Development Status Dashboard")
-st.caption("Data sources: ClinicalTrials.gov · PubMed · Europe PMC")
+st.title("Partner Pipeline Intelligence Dashboard")
+st.caption("Data sources: ClinicalTrials.gov · PubMed · Europe PMC · OpenAlex · bioRxiv/medRxiv")
 
 # ── Search inputs ──────────────────────────────────────
 st.subheader("Search")
@@ -66,7 +66,7 @@ def fetch_trials(sponsor, keyword, status):
         st.error(f"CT.gov API error: {e}")
         return []
 
-# ── PubMed search ──────────────────────────────────────
+# ── PubMed ─────────────────────────────────────────────
 def search_pubmed(nct_id):
     try:
         r = requests.get(
@@ -83,18 +83,26 @@ def search_pubmed(nct_id):
             timeout=8
         )
         result = r2.json().get("result", {})
-        return [
-            {
-                "title":  result[uid].get("title", ""),
-                "url":    f"https://pubmed.ncbi.nlm.nih.gov/{uid}/",
-                "source": "PubMed"
-            }
-            for uid in ids if result.get(uid, {}).get("title")
-        ]
+        papers = []
+        for uid in ids:
+            item  = result.get(uid, {})
+            title = item.get("title", "")
+            if not title:
+                continue
+            # 중복 제거 키: PMID 우선
+            papers.append({
+                "title":   title,
+                "url":     f"https://pubmed.ncbi.nlm.nih.gov/{uid}/",
+                "source":  "PubMed",
+                "pmid":    uid,
+                "doi":     "",
+                "is_preprint": False,
+            })
+        return papers
     except:
         return []
 
-# ── Europe PMC search ──────────────────────────────────
+# ── Europe PMC ─────────────────────────────────────────
 def search_europepmc(nct_id):
     try:
         r = requests.get(
@@ -119,24 +127,162 @@ def search_europepmc(nct_id):
                 else ""
             )
             if title and link:
-                papers.append({"title": title, "url": link, "source": "Europe PMC"})
+                papers.append({
+                    "title":   title,
+                    "url":     link,
+                    "source":  "Europe PMC",
+                    "pmid":    pmid,
+                    "doi":     doi,
+                    "is_preprint": False,
+                })
         return papers
     except:
         return []
 
-# ── Merge & deduplicate papers ─────────────────────────
+# ── OpenAlex ───────────────────────────────────────────
+def search_openalex(nct_id):
+    """
+    OpenAlex에서 NCT# 기반 검색.
+    clinical_trial_number 필드 우선, 없으면 full-text 검색 fallback.
+    """
+    try:
+        # 1차: clinical_trial_number 필드 직접 매칭
+        r = requests.get(
+            "https://api.openalex.org/works",
+            params={
+                "filter":     f"clinical_trial_number:{nct_id}",
+                "per_page":   5,
+                "select":     "id,title,doi,pmid,primary_location",
+            },
+            headers={"User-Agent": "pipeline-dashboard your@email.com"},
+            timeout=8
+        )
+        results = r.json().get("results", [])
+
+        # 2차 fallback: abstract/title 텍스트 검색
+        if not results:
+            r2 = requests.get(
+                "https://api.openalex.org/works",
+                params={
+                    "search":   nct_id,
+                    "per_page": 5,
+                    "select":   "id,title,doi,pmid,primary_location",
+                },
+                headers={"User-Agent": "pipeline-dashboard your@email.com"},
+                timeout=8
+            )
+            results = r2.json().get("results", [])
+
+        papers = []
+        for item in results:
+            title = item.get("title", "")
+            doi   = (item.get("doi") or "").replace("https://doi.org/", "")
+            pmid  = str(item.get("pmid") or "")
+            loc   = item.get("primary_location") or {}
+            url   = loc.get("landing_page_url") or (
+                f"https://doi.org/{doi}" if doi
+                else f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid
+                else ""
+            )
+            if title and url:
+                papers.append({
+                    "title":   title,
+                    "url":     url,
+                    "source":  "OpenAlex",
+                    "pmid":    pmid,
+                    "doi":     doi,
+                    "is_preprint": False,
+                })
+        return papers
+    except:
+        return []
+
+# ── bioRxiv / medRxiv ──────────────────────────────────
+def search_biorxiv(nct_id):
+    """
+    bioRxiv/medRxiv API에서 NCT# 텍스트 검색.
+    프리프린트이므로 is_preprint=True 플래그.
+    """
+    papers = []
+    for server in ["biorxiv", "medrxiv"]:
+        try:
+            r = requests.get(
+                f"https://api.biorxiv.org/details/{server}/{nct_id}/na/json",
+                timeout=8
+            )
+            items = r.json().get("collection", [])
+            for item in items:
+                title = item.get("title", "")
+                doi   = item.get("doi", "")
+                if title and doi:
+                    papers.append({
+                        "title":   title,
+                        "url":     f"https://doi.org/{doi}",
+                        "source":  f"{'bioRxiv' if server == 'biorxiv' else 'medRxiv'}",
+                        "pmid":    "",
+                        "doi":     doi,
+                        "is_preprint": True,
+                    })
+        except:
+            continue
+    return papers
+
+# ── 중복 제거 통합 함수 ────────────────────────────────
 def get_all_papers(nct_id):
-    seen, merged = set(), []
-    for p in search_pubmed(nct_id) + search_europepmc(nct_id):
-        key = p["title"][:60].lower()
-        if key not in seen:
-            seen.add(key)
-            merged.append(p)
-    return merged
+    """
+    우선순위: PubMed → Europe PMC → OpenAlex → bioRxiv/medRxiv
+    중복 제거 키 우선순위: PMID → DOI → 제목 앞 60자
+    피어리뷰 논문(is_preprint=False)과 프리프린트 분리 반환.
+    """
+    all_raw = (
+        search_pubmed(nct_id)
+        + search_europepmc(nct_id)
+        + search_openalex(nct_id)
+        + search_biorxiv(nct_id)
+    )
+
+    seen_pmids  = set()
+    seen_dois   = set()
+    seen_titles = set()
+
+    peer_reviewed = []
+    preprints     = []
+
+    for p in all_raw:
+        pmid  = p.get("pmid", "").strip()
+        doi   = p.get("doi",  "").strip().lower()
+        title_key = p["title"][:60].lower()
+
+        # 중복 체크
+        if pmid and pmid in seen_pmids:
+            continue
+        if doi and doi in seen_dois:
+            continue
+        if title_key in seen_titles:
+            continue
+
+        # seen에 등록
+        if pmid:
+            seen_pmids.add(pmid)
+        if doi:
+            seen_dois.add(doi)
+        seen_titles.add(title_key)
+
+        # 분류
+        if p["is_preprint"]:
+            preprints.append(p)
+        else:
+            peer_reviewed.append(p)
+
+    return peer_reviewed, preprints
 
 # ── Confidence scoring ─────────────────────────────────
-def get_confidence(papers, status):
-    n = len(papers)
+def get_confidence(peer_reviewed, status):
+    """
+    Confidence 판정은 피어리뷰 논문만 기준.
+    프리프린트는 별도 표기, 판정에 미포함.
+    """
+    n = len(peer_reviewed)
     if n >= 2 or (n == 1 and status == "COMPLETED"):
         return "✅ Confirmed"
     elif n == 1:
@@ -213,13 +359,19 @@ if search_btn:
 
             progress = st.progress(0, text="Matching publications...")
             for i, row in enumerate(rows):
-                papers            = get_all_papers(row["nct_id"])
-                row["papers"]     = papers
-                row["Confidence"] = get_confidence(papers, row["Status"])
-                row["Pubs"]       = len(papers)
-                row["Pub Sources"]= ", ".join(sorted({p["source"] for p in papers})) or "—"
-                progress.progress((i + 1) / total,
-                                  text=f"Matching publications... {i+1}/{total}")
+                peer_reviewed, preprints = get_all_papers(row["nct_id"])
+                row["peer_reviewed"] = peer_reviewed
+                row["preprints"]     = preprints
+                row["Confidence"]    = get_confidence(peer_reviewed, row["Status"])
+                row["Pubs"]          = len(peer_reviewed)
+                row["Preprints"]     = len(preprints)
+                row["Pub Sources"]   = (
+                    ", ".join(sorted({p["source"] for p in peer_reviewed})) or "—"
+                )
+                progress.progress(
+                    (i + 1) / total,
+                    text=f"Matching publications... {i+1}/{total}"
+                )
             progress.empty()
 
             # ── Summary metrics ────────────────────────
@@ -240,13 +392,16 @@ if search_btn:
             df_linked = pd.DataFrame(rows)[[
                 "NCT#", "Lead Sponsor", "Collaborators",
                 "Drug", "Indication", "Phase", "Status",
-                "Completion", "Confidence", "Pubs", "Pub Sources", "CT.gov Link"
+                "Completion", "Confidence", "Pubs", "Preprints",
+                "Pub Sources", "CT.gov Link"
             ]]
             st.dataframe(
                 df_linked,
                 use_container_width=True,
                 hide_index=True,
                 column_config={
+                    "Pubs":      st.column_config.NumberColumn("Pubs (peer-reviewed)"),
+                    "Preprints": st.column_config.NumberColumn("Preprints"),
                     "CT.gov Link": st.column_config.LinkColumn(
                         "CT.gov", display_text="Open ↗"
                     )
@@ -275,22 +430,37 @@ if search_btn:
                         st.caption(f"**Trial Title:** {row['Trial Title']}")
                         st.markdown(f"[View on CT.gov ↗]({row['CT.gov Link']})")
 
+                    # 피어리뷰 논문
                     st.write("")
-                    st.markdown("**Publications**")
-                    if row["papers"]:
-                        for p in row["papers"]:
+                    st.markdown("**Peer-reviewed Publications**")
+                    if row["peer_reviewed"]:
+                        for p in row["peer_reviewed"]:
                             st.markdown(
-                                f"- **[{p['title'][:120]}]({p['url']})** `{p['source']}`"
+                                f"- **[{p['title'][:120]}]({p['url']})** "
+                                f"`{p['source']}`"
                             )
                     else:
-                        st.caption("No publications found in PubMed or Europe PMC.")
+                        st.caption("No peer-reviewed publications found.")
+
+                    # 프리프린트 — 별도 섹션, 경고 문구 포함
+                    if row["preprints"]:
+                        st.write("")
+                        st.markdown("**Preprints** _(not peer-reviewed — use with caution)_")
+                        for p in row["preprints"]:
+                            st.markdown(
+                                f"- [{p['title'][:120]}]({p['url']}) "
+                                f"`{p['source']}`"
+                            )
 
             # ── CSV export ─────────────────────────────
             df_export = pd.DataFrame(rows)[[
                 "NCT#", "Lead Sponsor", "Collaborators",
                 "Drug", "Indication", "Phase", "Status",
-                "Completion", "Confidence", "Pubs", "Pub Sources", "CT.gov Link"
+                "Completion", "Confidence", "Pubs", "Preprints",
+                "Pub Sources", "CT.gov Link"
             ]]
             csv   = df_export.to_csv(index=False).encode("utf-8-sig")
             label = sponsor_input or keyword_input
-            st.download_button("Export CSV", csv, f"{label}_pipeline.csv", "text/csv")
+            st.download_button(
+                "Export CSV", csv, f"{label}_pipeline.csv", "text/csv"
+            )

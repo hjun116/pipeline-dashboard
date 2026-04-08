@@ -3,41 +3,65 @@ import requests
 import pandas as pd
 
 st.set_page_config(page_title="Pipeline Dashboard", layout="wide")
-st.title("Partner Pipeline Status Dashboard")
+st.title("Partner Pipeline Intelligence Dashboard")
 st.caption("Data sources: ClinicalTrials.gov · PubMed · Europe PMC")
 
 # ── Search inputs ──────────────────────────────────────
-col1, col2, col3 = st.columns([2, 1, 1])
+st.subheader("Search")
 
-with col1:
-    query = st.text_input(
-        "Search",
-        placeholder="Sponsor name, drug name, or indication (e.g. Agenus, nivolumab, NSCLC)"
+row1_col1, row1_col2 = st.columns([2, 2])
+with row1_col1:
+    sponsor_input = st.text_input(
+        "Sponsor / Lead Organization",
+        placeholder="e.g. Agenus, Merck, BioNTech"
     )
-with col2:
+with row1_col2:
+    keyword_input = st.text_input(
+        "Drug name / Indication / Keyword",
+        placeholder="e.g. nivolumab, NSCLC, PD-1"
+    )
+
+row2_col1, row2_col2, row2_col3 = st.columns([1, 1, 1])
+with row2_col1:
     phase_filter = st.selectbox(
         "Phase",
         ["All", "Phase 1", "Phase 2", "Phase 3", "Phase 4"]
     )
-with col3:
+with row2_col2:
     status_filter = st.selectbox(
         "Status",
         ["All", "RECRUITING", "ACTIVE_NOT_RECRUITING", "COMPLETED", "TERMINATED"]
     )
-
-search_btn = st.button("Search", type="primary")
+with row2_col3:
+    st.write("")
+    st.write("")
+    search_btn = st.button("Search", type="primary", use_container_width=True)
 
 # ── CT.gov API ─────────────────────────────────────────
-def fetch_trials(query, phase, status):
+def fetch_trials(sponsor, keyword, status):
     url = "https://clinicaltrials.gov/api/v2/studies"
+
+    # Sponsor + keyword AND 조합
+    terms = []
+    if sponsor:
+        terms.append(sponsor)
+    if keyword:
+        terms.append(keyword)
+    query_term = " AND ".join(terms) if terms else ""
+
     params = {
-        "query.term": query,
+        "query.term": query_term,
         "pageSize": 50,
         "format": "json",
-        "fields": "NCTId,BriefTitle,OverallStatus,Phase,Condition,InterventionName,PrimaryCompletionDate,LeadSponsorName"
+        "fields": (
+            "NCTId,BriefTitle,OverallStatus,Phase,Condition,"
+            "InterventionName,PrimaryCompletionDate,"
+            "LeadSponsorName,CollaboratorName"
+        )
     }
     if status != "All":
         params["filter.overallStatus"] = status
+
     try:
         r = requests.get(url, params=params, timeout=10)
         r.raise_for_status()
@@ -48,81 +72,76 @@ def fetch_trials(query, phase, status):
 
 # ── PubMed search ──────────────────────────────────────
 def search_pubmed(nct_id):
-    """Return list of {title, url} matched by NCT# in PubMed."""
-    search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-    fetch_url  = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
     try:
-        r = requests.get(search_url, params={
-            "db": "pubmed", "term": nct_id, "retmode": "json", "retmax": 5
-        }, timeout=8)
+        r = requests.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+            params={"db": "pubmed", "term": nct_id, "retmode": "json", "retmax": 5},
+            timeout=8
+        )
         ids = r.json()["esearchresult"]["idlist"]
         if not ids:
             return []
-        r2 = requests.get(fetch_url, params={
-            "db": "pubmed", "id": ",".join(ids), "retmode": "json"
-        }, timeout=8)
+        r2 = requests.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+            params={"db": "pubmed", "id": ",".join(ids), "retmode": "json"},
+            timeout=8
+        )
         result = r2.json().get("result", {})
-        papers = []
-        for uid in ids:
-            item = result.get(uid, {})
-            title = item.get("title", "")
-            if title:
-                papers.append({
-                    "title": title,
-                    "url": f"https://pubmed.ncbi.nlm.nih.gov/{uid}/",
-                    "source": "PubMed"
-                })
-        return papers
+        return [
+            {
+                "title":  result[uid].get("title", ""),
+                "url":    f"https://pubmed.ncbi.nlm.nih.gov/{uid}/",
+                "source": "PubMed"
+            }
+            for uid in ids if result.get(uid, {}).get("title")
+        ]
     except:
         return []
 
 # ── Europe PMC search ──────────────────────────────────
 def search_europepmc(nct_id):
-    """Return list of {title, url} matched by NCT# in Europe PMC."""
-    url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
     try:
-        r = requests.get(url, params={
-            "query": f"CLINICAL_TRIAL_ID:{nct_id}",
-            "format": "json",
-            "pageSize": 5,
-            "resultType": "core"
-        }, timeout=8)
+        r = requests.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            params={
+                "query":      f"CLINICAL_TRIAL_ID:{nct_id}",
+                "format":     "json",
+                "pageSize":   5,
+                "resultType": "core"
+            },
+            timeout=8
+        )
         items = r.json().get("resultList", {}).get("result", [])
         papers = []
         for item in items:
             title = item.get("title", "")
             pmid  = item.get("pmid", "")
             doi   = item.get("doi", "")
-            if pmid:
-                link = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
-            elif doi:
-                link = f"https://doi.org/{doi}"
-            else:
-                link = ""
+            link  = (
+                f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid
+                else f"https://doi.org/{doi}" if doi
+                else ""
+            )
             if title and link:
                 papers.append({"title": title, "url": link, "source": "Europe PMC"})
         return papers
     except:
         return []
 
-# ── Merge & deduplicate papers ─────────────────────────
+# ── Merge & deduplicate ────────────────────────────────
 def get_all_papers(nct_id):
-    pubmed_papers = search_pubmed(nct_id)
-    epmc_papers   = search_europepmc(nct_id)
-    seen_titles   = set()
-    merged = []
-    for p in pubmed_papers + epmc_papers:
+    seen, merged = set(), []
+    for p in search_pubmed(nct_id) + search_europepmc(nct_id):
         key = p["title"][:60].lower()
-        if key not in seen_titles:
-            seen_titles.add(key)
+        if key not in seen:
+            seen.add(key)
             merged.append(p)
     return merged
 
 # ── Confidence scoring ─────────────────────────────────
 def get_confidence(papers, status):
     n = len(papers)
-    sources = {p["source"] for p in papers}
-    if n >= 2 or (n == 1 and len(sources) >= 1 and status == "COMPLETED"):
+    if n >= 2 or (n == 1 and status == "COMPLETED"):
         return "✅ Confirmed"
     elif n == 1:
         return "⚠️ Partial"
@@ -153,105 +172,115 @@ def parse_trials(studies):
         conditions = cond_mod.get("conditions", [])
         intervs    = interv_mod.get("interventions", [])
         drug       = intervs[0].get("name", "") if intervs else ""
-        sponsor    = sponsor_mod.get("leadSponsor", {}).get("name", "")
+        lead       = sponsor_mod.get("leadSponsor", {}).get("name", "")
+        collabs    = sponsor_mod.get("collaborators", [])
+        collab_str = ", ".join([c.get("name", "") for c in collabs[:2]]) if collabs else "—"
         completion = status_mod.get("primaryCompletionDateStruct", {}).get("date", "")
+        brief      = id_mod.get("briefTitle", "")
 
         rows.append({
-            "nct_id":     nct,
-            "Drug":       drug[:35],
-            "Indication": (conditions[0] if conditions else "")[:40],
-            "Phase":      phase_str,
-            "Status":     overall,
-            "Sponsor":    sponsor[:30],
-            "Completion": completion,
+            "nct_id":        nct,
+            "NCT#":          nct,
+            "Lead Sponsor":  lead[:35],
+            "Collaborators": collab_str[:45],
+            "Drug":          drug[:35],
+            "Indication":    (conditions[0] if conditions else "")[:40],
+            "Phase":         phase_str,
+            "Status":        overall,
+            "Completion":    completion,
+            "Trial Title":   brief[:80],
         })
     return rows
 
-# ── Phase filter (client-side) ─────────────────────────
+# ── Phase filter ───────────────────────────────────────
 def apply_phase_filter(rows, phase):
     if phase == "All":
         return rows
-    return [r for r in rows if phase.upper().replace(" ", "_") in r["Phase"].upper().replace(" ", "_")]
+    return [r for r in rows if phase.upper().replace(" ", "_")
+            in r["Phase"].upper().replace(" ", "_")]
 
 # ── Main ───────────────────────────────────────────────
-if search_btn and query:
-    with st.spinner("Querying ClinicalTrials.gov..."):
-        studies = fetch_trials(query, phase_filter, status_filter)
-
-    if not studies:
-        st.warning("No results found. Try a different keyword.")
+if search_btn:
+    if not sponsor_input and not keyword_input:
+        st.warning("Please enter a sponsor name or keyword.")
     else:
-        rows = parse_trials(studies)
-        rows = apply_phase_filter(rows, phase_filter)
+        with st.spinner("Querying ClinicalTrials.gov..."):
+            studies = fetch_trials(sponsor_input, keyword_input, status_filter)
 
-        progress = st.progress(0, text="Matching publications...")
-        total = len(rows)
+        if not studies:
+            st.warning("No results found. Try a different keyword.")
+        else:
+            rows = parse_trials(studies)
+            rows = apply_phase_filter(rows, phase_filter)
+            total = len(rows)
 
-        for i, row in enumerate(rows):
-            papers = get_all_papers(row["nct_id"])
-            row["papers"]     = papers
-            row["Confidence"] = get_confidence(papers, row["Status"])
-            row["Publications"] = len(papers)
-            row["Sources"]    = ", ".join(sorted({p["source"] for p in papers})) if papers else "—"
-            progress.progress((i + 1) / total, text=f"Matching publications... {i+1}/{total}")
+            progress = st.progress(0, text="Matching publications...")
+            for i, row in enumerate(rows):
+                papers            = get_all_papers(row["nct_id"])
+                row["papers"]     = papers
+                row["Confidence"] = get_confidence(papers, row["Status"])
+                row["Pubs"]       = len(papers)
+                row["Pub Sources"]= ", ".join(sorted({p["source"] for p in papers})) or "—"
+                progress.progress((i + 1) / total,
+                                  text=f"Matching publications... {i+1}/{total}")
+            progress.empty()
 
-        progress.empty()
+            # ── Summary metrics ────────────────────────
+            confirmed  = sum(1 for r in rows if "Confirmed"  in r["Confidence"])
+            partial    = sum(1 for r in rows if "Partial"    in r["Confidence"])
+            unverified = sum(1 for r in rows if "Unverified" in r["Confidence"])
 
-        # ── Summary metrics ────────────────────────────
-        confirmed  = sum(1 for r in rows if "Confirmed"  in r["Confidence"])
-        partial    = sum(1 for r in rows if "Partial"    in r["Confidence"])
-        unverified = sum(1 for r in rows if "Unverified" in r["Confidence"])
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total trials",   total)
+            m2.metric("✅ Confirmed",   confirmed)
+            m3.metric("⚠️ Partial",    partial)
+            m4.metric("❌ Unverified", unverified)
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total trials",    total)
-        m2.metric("✅ Confirmed",    confirmed)
-        m3.metric("⚠️ Partial",     partial)
-        m4.metric("❌ Unverified",  unverified)
+            st.divider()
 
-        st.divider()
+            # ── Pipeline table ─────────────────────────
+            st.subheader("Pipeline Overview")
 
-        # ── Pipeline table ─────────────────────────────
-        st.subheader("Pipeline Overview")
+            display_cols = [
+                "NCT#", "Lead Sponsor", "Collaborators",
+                "Drug", "Indication", "Phase", "Status",
+                "Completion", "Confidence", "Pubs", "Pub Sources"
+            ]
+            df = pd.DataFrame(rows)[display_cols]
+            st.dataframe(df, use_container_width=True, hide_index=True)
 
-        df_display = pd.DataFrame([{
-            "NCT#":         r["nct_id"],
-            "Drug":         r["Drug"],
-            "Indication":   r["Indication"],
-            "Phase":        r["Phase"],
-            "Status":       r["Status"],
-            "Completion":   r["Completion"],
-            "Confidence":   r["Confidence"],
-            "Publications": r["Publications"],
-            "Sources":      r["Sources"],
-        } for r in rows])
+            # ── Publication detail ─────────────────────
+            st.divider()
+            st.subheader("Publication Detail by Trial")
 
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
+            for row in rows:
+                header = (
+                    f"{row['NCT#']} · "
+                    f"{row['Lead Sponsor']} · "
+                    f"{row['Drug'] or '—'} · "
+                    f"{row['Indication'][:30] or '—'} · "
+                    f"{row['Confidence']}"
+                )
+                with st.expander(header):
+                    col_a, col_b = st.columns([1, 1])
+                    with col_a:
+                        st.caption(f"**Lead Sponsor:** {row['Lead Sponsor']}")
+                        st.caption(f"**Collaborators:** {row['Collaborators']}")
+                        st.caption(f"**Phase:** {row['Phase']}  |  **Status:** {row['Status']}")
+                        st.caption(f"**Completion:** {row['Completion'] or '—'}")
+                    with col_b:
+                        st.caption(f"**Trial Title:** {row['Trial Title']}")
 
-        # ── Publication detail ─────────────────────────
-        st.divider()
-        st.subheader("Publication Detail by Trial")
+                    st.write("")
+                    if row["papers"]:
+                        for p in row["papers"]:
+                            st.markdown(
+                                f"- **[{p['title'][:120]}]({p['url']})** `{p['source']}`"
+                            )
+                    else:
+                        st.caption("No publications found in PubMed or Europe PMC.")
 
-        for row in rows:
-            nct   = row["nct_id"]
-            drug  = row["Drug"] or nct
-            conf  = row["Confidence"]
-            papers = row["papers"]
-
-            with st.expander(f"{nct} · {drug} · {conf}"):
-                if papers:
-                    for p in papers:
-                        st.markdown(f"- **[{p['title'][:120]}]({p['url']})** `{p['source']}`")
-                else:
-                    st.caption("No publications found in PubMed or Europe PMC.")
-
-        # ── CSV export ─────────────────────────────────
-        csv = df_display.to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            "Export CSV",
-            csv,
-            f"{query}_pipeline.csv",
-            "text/csv"
-        )
-
-elif search_btn and not query:
-    st.warning("Please enter a search term.")
+            # ── CSV export ─────────────────────────────
+            csv = df.to_csv(index=False).encode("utf-8-sig")
+            label = sponsor_input or keyword_input
+            st.download_button("Export CSV", csv, f"{label}_pipeline.csv", "text/csv")

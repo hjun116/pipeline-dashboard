@@ -467,6 +467,19 @@ if search_btn:
                         st.caption("No filings auto-matched.")
                         st.markdown(f"[Search {row['Lead Sponsor']} on EDGAR ↗]({edgar_fallback})")
 
+            # filings가 비어있거나 불안정할 때 fallback 링크 제공
+edgar_search_link = (
+    f"https://efts.sec.gov/LATEST/search-index"
+    f"?q=%22{requests.utils.quote(edgar_drug or edgar_sponsor)}%22"
+    f"&entity={requests.utils.quote(edgar_sponsor)}"
+    f"&forms=8-K,10-K"
+    f"&dateRange=custom&startdt=2020-01-01"
+)
+st.markdown(
+    f"Direct EDGAR search → "
+    f"[{edgar_sponsor} · {edgar_drug or 'all filings'}]({edgar_search_link})"
+)
+            
             # ── CSV export ─────────────────────────────
             csv = df.to_csv(index=False).encode("utf-8-sig")
             label = sponsor_input or keyword_input

@@ -189,6 +189,7 @@ def parse_trials(studies):
             "Status":        overall,
             "Completion":    completion,
             "Trial Title":   brief[:80],
+            "CT.gov Link":   f"https://clinicaltrials.gov/study/{nct}",
         })
     return rows
 
@@ -247,7 +248,24 @@ if search_btn:
                 "Completion", "Confidence", "Pubs", "Pub Sources"
             ]
             df = pd.DataFrame(rows)[display_cols]
-            st.dataframe(df, use_container_width=True, hide_index=True)
+
+            # NCT# 컬럼을 클릭 가능한 링크로 변환
+            df_linked = pd.DataFrame(rows)[[
+                "NCT#", "Lead Sponsor", "Collaborators",
+                "Drug", "Indication", "Phase", "Status",
+                "Completion", "Confidence", "Pubs", "Pub Sources", "CT.gov Link"
+            ]]
+            st.dataframe(
+                df_linked,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "CT.gov Link": st.column_config.LinkColumn(
+                        "CT.gov",
+                        display_text="Open ↗"
+                    )
+                }
+            )
 
             # ── Publication detail ─────────────────────
             st.divider()
@@ -270,6 +288,7 @@ if search_btn:
                         st.caption(f"**Completion:** {row['Completion'] or '—'}")
                     with col_b:
                         st.caption(f"**Trial Title:** {row['Trial Title']}")
+                        st.markdown(f"[View on CT.gov ↗]({row['CT.gov Link']})")
 
                     st.write("")
                     if row["papers"]:

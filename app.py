@@ -347,7 +347,9 @@ if search_btn:
                         st.caption(f"**Trial Title:** {row['Trial Title']}")
                         st.markdown(f"[View on CT.gov ↗]({row['CT.gov Link']})")
 
+                    # ── Publications ───────────────────
                     st.write("")
+                    st.markdown("**Publications**")
                     if row["papers"]:
                         for p in row["papers"]:
                             st.markdown(
@@ -355,6 +357,23 @@ if search_btn:
                             )
                     else:
                         st.caption("No publications found in PubMed or Europe PMC.")
+
+                    # ── SEC Filings ─────────────────────
+                    st.write("")
+                    st.markdown("**SEC Filings (EDGAR)**")
+                    filings = get_edgar_filings(row["Lead Sponsor"])
+                    if filings:
+                        for f in filings:
+                            label = f"{f['form']} · {f['filed']} · {f['description'][:60]}"
+                            st.markdown(f"- [{label}]({f['url']})")
+                    else:
+                        edgar_fallback = (
+                            "https://www.sec.gov/cgi-bin/browse-edgar"
+                            f"?action=getcompany&company={requests.utils.quote(row['Lead Sponsor'])}"
+                            "&type=8-K&dateb=&owner=include&count=10"
+                        )
+                        st.caption("No filings auto-matched.")
+                        st.markdown(f"[Search {row['Lead Sponsor']} on EDGAR ↗]({edgar_fallback})")
 
             # ── CSV export ─────────────────────────────
             csv = df.to_csv(index=False).encode("utf-8-sig")

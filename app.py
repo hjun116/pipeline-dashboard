@@ -144,7 +144,7 @@ def get_cik(sponsor_name):
     EDGAR company search API로 Sponsor명 → CIK 변환.
     가장 유사한 회사 1개의 (cik, name) 반환.
     """
-    headers = {"User-Agent": "pipeline-dashboard your@email.com"}
+    headers = {"User-Agent": "pipeline-dashboard hyesun116@gmail.com"}
     try:
         r = requests.get(
             "https://efts.sec.gov/LATEST/search-index",
@@ -206,7 +206,7 @@ def fetch_edgar_filings(sponsor_name, drug_name, filing_types=["8-K", "10-K"], m
     2) EDGAR full-text search: CIK 회사 제출 문서 중 drug_name 언급 건
     3) 문서별 직접 링크 반환
     """
-    headers = {"User-Agent": "pipeline-dashboard your@email.com"}
+    headers = {"User-Agent": "pipeline-dashboard hyesun116@gmail.com"}
 
     # Step 1: CIK 확정
     cik, entity_display = get_cik(sponsor_name)

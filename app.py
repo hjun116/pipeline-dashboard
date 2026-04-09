@@ -350,6 +350,7 @@ if not search_btn:
     st.stop()
 
 # ── API 함수들 ─────────────────────────────────────────
+@st.cache_data(ttl=3600)
 def fetch_trials(sponsor, keyword, status, date_from, date_to):
     base_url = "https://clinicaltrials.gov/api/v2/studies"
     base_params = {
@@ -528,6 +529,7 @@ def search_biorxiv(nct_id):
             continue
     return papers
 
+@st.cache_data(ttl=3600)
 def get_all_papers(nct_id):
     all_raw = (
         search_pubmed(nct_id)

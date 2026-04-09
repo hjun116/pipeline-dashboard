@@ -645,43 +645,76 @@ def apply_phase_filter(rows, phase):
     ]
 
 # ── 검색 실행 ──────────────────────────────────────────
-if not sponsor_input and not keyword_input:
-    st.warning("Please enter a sponsor name or keyword in the sidebar.")
+if "results" not in st.session_state:
+    st.session_state.results = None
+    st.session_state.last_query = {}
+
+current_query = {
+    "sponsor":    sponsor_input,
+    "keyword":    keyword_input,
+    "status":     status_filter,
+    "phase":      phase_filter,
+    "date_from":  str(date_from),
+    "date_to":    str(date_to),
+}
+
+# 검색 버튼을 눌렀을 때만 API 호출
+if search_btn:
+    if not sponsor_input and not keyword_input:
+        st.warning("Please enter a sponsor name or keyword in the sidebar.")
+        st.stop()
+
+    # 이전 검색과 다를 때만 새로 호출
+    if current_query != st.session_state.last_query:
+        with st.spinner("Querying ClinicalTrials.gov..."):
+            studies = fetch_trials(
+                sponsor_input, keyword_input,
+                status_filter, date_from, date_to
+            )
+
+        if not studies:
+            st.warning(
+                "No results found. Try a different keyword "
+                "or widen the date range in the sidebar."
+            )
+            st.stop()
+
+        rows = parse_trials(studies)
+        rows = apply_phase_filter(rows, phase_filter)
+
+        progress = st.progress(0, text="Matching publications...")
+        for i, row in enumerate(rows):
+            peer_reviewed, preprints = get_all_papers(row["nct_id"])
+            row["peer_reviewed"] = peer_reviewed
+            row["preprints"]     = preprints
+            row["Confidence"]    = get_confidence(peer_reviewed, row["Status_raw"])
+            row["Pubs"]          = len(peer_reviewed)
+            row["Preprints"]     = len(preprints)
+            row["Pub Sources"]   = (
+                ", ".join(sorted({p["source"] for p in peer_reviewed})) or "—"
+            )
+            progress.progress(
+                (i + 1) / len(rows),
+                text=f"Matching publications... {i+1}/{len(rows)}"
+            )
+        progress.empty()
+
+        st.session_state.results    = rows
+        st.session_state.last_query = current_query
+
+# 결과가 없으면 여기서 중단
+if st.session_state.results is None:
+    st.info(
+        "Enter a sponsor name or keyword in the sidebar and click "
+        "**Search** to begin.  \n"
+        "**Tip:** If a recently registered investigator-initiated trial "
+        "is missing, try widening the date range in the sidebar."
+    )
     st.stop()
 
-with st.spinner("Querying ClinicalTrials.gov..."):
-    studies = fetch_trials(
-        sponsor_input, keyword_input,
-        status_filter, date_from, date_to
-    )
-
-if not studies:
-    st.warning(
-        "No results found. Try a different keyword "
-        "or widen the date range in the sidebar."
-    )
-    st.stop()
-
-rows  = parse_trials(studies)
-rows  = apply_phase_filter(rows, phase_filter)
+# 세션에서 결과 불러오기
+rows  = st.session_state.results
 total = len(rows)
-
-progress = st.progress(0, text="Matching publications...")
-for i, row in enumerate(rows):
-    peer_reviewed, preprints = get_all_papers(row["nct_id"])
-    row["peer_reviewed"] = peer_reviewed
-    row["preprints"]     = preprints
-    row["Confidence"]    = get_confidence(peer_reviewed, row["Status_raw"])
-    row["Pubs"]          = len(peer_reviewed)
-    row["Preprints"]     = len(preprints)
-    row["Pub Sources"]   = (
-        ", ".join(sorted({p["source"] for p in peer_reviewed})) or "—"
-    )
-    progress.progress(
-        (i + 1) / total,
-        text=f"Matching publications... {i+1}/{total}"
-    )
-progress.empty()
 
 # ── 사이드바 CSV 다운로드 ──────────────────────────────
 df_export = pd.DataFrame(rows)[[

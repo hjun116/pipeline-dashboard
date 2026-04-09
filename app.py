@@ -74,16 +74,45 @@ def generate_pdf(row):
     nct       = row.get("NCT#", "")
     ct_link   = row.get("CT.gov Link", "")
     gen_date  = date.today().strftime("%Y-%m-%d")
+    conf      = row.get("Confidence", "—")
+    conf_color_ = conf_color(conf)
 
-    elements.append(Paragraph(drug_name, s_title))
+    # 제목 + Confidence 배지를 한 행 테이블로 나란히 배치
+    title_para = Paragraph(drug_name, s_title)
+    conf_badge = Paragraph(
+        f"<b>{conf}</b>",
+        ParagraphStyle(
+            "badge",
+            fontSize=9,
+            textColor=conf_color_,
+            fontName="Helvetica-Bold",
+            alignment=TA_RIGHT,
+            leading=22,  # s_title fontSize=18 기준으로 수직 정렬
+        )
+    )
+    header_table = Table(
+        [[title_para, conf_badge]],
+        colWidths=[W * 0.72, W * 0.28]
+    )
+    header_table.setStyle(TableStyle([
+        ("VALIGN",        (0, 0), (-1, -1), "BOTTOM"),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+        ("TOPPADDING",    (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    elements.append(header_table)
+
+    # 서브헤드라인 — 제목 아래 별도 줄로 분리
     elements.append(Paragraph(
         f"{sponsor}  ·  {nct}  ·  "
         f'<a href="{ct_link}" color="#0f6e56">View on CT.gov</a>  ·  '
         f"Generated {gen_date}",
         s_subtitle
     ))
-    elements.append(HRFlowable(width=W, thickness=1.5,
-                                color=ACCENT, spaceAfter=8))
+    elements.append(HRFlowable(
+        width=W, thickness=1.5, color=ACCENT, spaceAfter=8
+    ))
 
     # ── 섹션 1: Trial Snapshot ─────────────────────────
     elements.append(Paragraph("Trial Snapshot", s_section))
@@ -124,27 +153,11 @@ def generate_pdf(row):
     # ── 섹션 2: Clinical Evidence Summary ─────────────
     elements.append(Paragraph("Clinical Evidence Summary", s_section))
 
-    conf       = row.get("Confidence", "—")
-    conf_color_ = conf_color(conf)
+    
     peer       = row.get("peer_reviewed", [])
     preprints  = row.get("preprints", [])
 
-    # Confidence 배지
-    conf_data  = [[Paragraph(f"<b>Confidence: {conf}</b>",
-                             ParagraphStyle("c", fontSize=10,
-                                            textColor=conf_color_,
-                                            fontName="Helvetica-Bold"))]]
-    conf_table = Table(conf_data, colWidths=[W])
-    conf_table.setStyle(TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, -1), LIGHT_GRAY),
-        ("LEFTPADDING",   (0, 0), (-1, -1), 8),
-        ("TOPPADDING",    (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-        ("ROUNDEDCORNERS", [4]),
-    ]))
-    elements.append(conf_table)
-    elements.append(Spacer(1, 6))
-
+    
     # 피어리뷰 논문
     elements.append(Paragraph(
         f"Peer-reviewed Publications ({len(peer)})", s_bold

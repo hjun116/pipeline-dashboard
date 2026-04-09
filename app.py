@@ -39,28 +39,51 @@ def generate_pdf(row):
     def style(name, **kwargs):
         return ParagraphStyle(name, **kwargs)
 
-    s_title   = style("s_title",   fontSize=18, textColor=DARK,
-                      fontName="Helvetica-Bold", spaceAfter=0)
-    s_subtitle= style("s_subtitle",fontSize=9,  textColor=MID_GRAY,
-                      fontName="Helvetica", spaceAfter=4)
-    s_section = style("s_section", fontSize=11, textColor=ACCENT,
-                      fontName="Helvetica-Bold", spaceBefore=10, spaceAfter=4)
-    s_body    = style("s_body",    fontSize=9,  textColor=DARK,
-                      fontName="Helvetica", spaceAfter=3, leading=14)
-    s_small   = style("s_small",   fontSize=8,  textColor=MID_GRAY,
-                      fontName="Helvetica", spaceAfter=2, leading=12)
-    s_bold    = style("s_bold",    fontSize=9,  textColor=DARK,
-                      fontName="Helvetica-Bold", spaceAfter=3)
-    s_footer  = style("s_footer",  fontSize=7,  textColor=MID_GRAY,
-                      fontName="Helvetica", alignment=TA_CENTER)
-    s_question= style("s_question",fontSize=9,  textColor=DARK,
-                      fontName="Helvetica", spaceAfter=4,
-                      leading=14, leftIndent=10)
+    s_title    = style("s_title",    fontSize=18, textColor=DARK,
+                       fontName="Helvetica-Bold", spaceAfter=0)
+    s_subtitle = style("s_subtitle", fontSize=9,  textColor=MID_GRAY,
+                       fontName="Helvetica", spaceAfter=4)
+    # ➊ 섹션 헤더: leftIndent=0 명시 → 3개 섹션 동일 왼쪽 정렬
+    s_section  = style("s_section",  fontSize=11, textColor=ACCENT,
+                       fontName="Helvetica-Bold", spaceBefore=12,
+                       spaceAfter=4, leftIndent=0)
+    s_body     = style("s_body",     fontSize=9,  textColor=DARK,
+                       fontName="Helvetica", spaceAfter=3, leading=14)
+    s_small    = style("s_small",    fontSize=8,  textColor=MID_GRAY,
+                       fontName="Helvetica", spaceAfter=2, leading=12)
+    s_bold     = style("s_bold",     fontSize=9,  textColor=DARK,
+                       fontName="Helvetica-Bold", spaceAfter=3)
+    s_footer   = style("s_footer",   fontSize=7,  textColor=MID_GRAY,
+                       fontName="Helvetica", alignment=TA_CENTER)
+    s_question = style("s_question", fontSize=9,  textColor=DARK,
+                       fontName="Helvetica", spaceAfter=4,
+                       leading=14, leftIndent=0)
+    s_conf_tag = style("s_conf_tag", fontSize=8,  textColor=MID_GRAY,
+                       fontName="Helvetica", spaceAfter=6, leading=13)
 
     def conf_color(conf):
         if "Confirmed" in conf: return GREEN
         if "Partial"   in conf: return AMBER
         return RED
+
+    # ── Phase / Status 텍스트 정제 (이모지·특수문자 제거) ──
+    def clean_phase(raw):
+        """'🔬 PHASE1' → 'Phase 1'"""
+        import re
+        # 이모지 제거
+        text = re.sub(r'[^\x00-\x7F]+', '', raw).strip()
+        # PHASE1 → Phase 1
+        text = re.sub(
+            r'(?i)phase\s*(\d)',
+            lambda m: f"Phase {m.group(1)}",
+            text
+        ).strip()
+        return text or raw
+
+    def clean_status(raw):
+        """'✅ Completed' → 'Completed'"""
+        import re
+        return re.sub(r'[^\x00-\x7F]+', '', raw).strip() or raw
 
     elements = []
     W = A4[0] - 40 * mm  # 유효 너비
@@ -74,11 +97,12 @@ def generate_pdf(row):
     conf        = row.get("Confidence", "—")
     conf_color_ = conf_color(conf)
 
-    # 제목 단독 줄
+    # ➊ 제목 단독 줄
     elements.append(Paragraph(drug_name, s_title))
-    elements.append(Spacer(1, 8))
+    # ➊ Spacer 1.5배 → 12pt (기존 8pt)
+    elements.append(Spacer(1, 14))
 
-    # 서브헤드라인 — 제목과 충분한 간격 확보
+    # 서브헤드라인
     elements.append(Paragraph(
         f"{sponsor}  ·  {nct}  ·  "
         f'<a href="{ct_link}" color="#0f6e56">View on CT.gov</a>  ·  '
@@ -90,21 +114,26 @@ def generate_pdf(row):
     ))
 
     # ── 섹션 1: Trial Snapshot ─────────────────────────
+    # ➏ s_section leftIndent=0 으로 동일 줄맞춤
     elements.append(Paragraph("Trial Snapshot", s_section))
 
+    # ➋ Phase/Status 정제 + ➍ Trial Title을 NCT# 바로 다음(2번째 행)으로
+    phase_clean  = clean_phase(row.get("Phase", "—"))
+    status_clean = clean_status(row.get("Status", "—"))
+
     snap_data = [
-        ["Field", "Value"],
+        ["Field",              "Value"],
         ["NCT#",               nct],
+        ["Trial Title",        row.get("Trial Title", "—")],   # ➍ 2번째
         ["Lead Sponsor",       row.get("Lead Sponsor", "—")],
         ["Collaborators",      row.get("Collaborators", "—")],
         ["Indication",         row.get("Indication", "—")],
-        ["Phase",              row.get("Phase", "—")],
-        ["Status",             row.get("Status", "—")],
+        ["Phase",              phase_clean],                    # ➋ 이모지 제거
+        ["Status",             status_clean],                   # ➌ 이모지 제거
         ["Primary Completion", row.get("Completion") or "—"],
-        ["Trial Title",        row.get("Trial Title", "—")],
     ]
 
-    snap_table = Table(snap_data, colWidths=[42 * mm, W - 42 * mm])
+    snap_table = Table(snap_data, colWidths=[44 * mm, W - 44 * mm])
     snap_table.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, 0),  ACCENT),
         ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
@@ -130,45 +159,15 @@ def generate_pdf(row):
     peer      = row.get("peer_reviewed", [])
     preprints = row.get("preprints", [])
 
-    # 섹션 제목과 Confidence 배지를 같은 줄에 배치
-    section_title = Paragraph("Clinical Evidence Summary", s_section)
+    # ➏ 섹션 제목 단독 (박스 제거 → 제목만, leftIndent=0 으로 동일 줄맞춤)
+    elements.append(Paragraph("Clinical Evidence Summary", s_section))
 
-    conf_badge = Paragraph(
-        conf,
-        ParagraphStyle(
-            "badge",
-            fontSize=7,
-            textColor=conf_color_,
-            fontName="Helvetica",
-            alignment=TA_RIGHT,
-            leading=13,
-        )
+    # ➄ Confidence: 박스 없이 섹션 제목 바로 아래, Peer-reviewed 위에
+    conf_para = Paragraph(
+        f'<font color="{conf_color_.hexval()}">{conf}</font>',
+        s_conf_tag
     )
-    badge_box = Table(
-        [[conf_badge]],
-        colWidths=[W * 0.35]
-    )
-    badge_box.setStyle(TableStyle([
-        ("BOX",           (0, 0), (-1, -1), 0.5, conf_color_),
-        ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#fafafa")),
-        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING",  (0, 0), (-1, -1), 6),
-        ("TOPPADDING",    (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-    ]))
-
-    section_row = Table(
-        [[section_title, badge_box]],
-        colWidths=[W * 0.63, W * 0.37]
-    )
-    section_row.setStyle(TableStyle([
-        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING",   (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
-        ("TOPPADDING",    (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ]))
-    elements.append(section_row)
+    elements.append(conf_para)
 
     # 피어리뷰 논문
     elements.append(Paragraph(
@@ -210,6 +209,7 @@ def generate_pdf(row):
     elements.append(Spacer(1, 6))
 
     # ── 섹션 3: Key Questions for Meeting ─────────────
+    # ➏ leftIndent=0 으로 동일 줄맞춤
     elements.append(Paragraph("Key Questions for Meeting", s_section))
 
     questions  = []

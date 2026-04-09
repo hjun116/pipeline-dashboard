@@ -55,6 +55,25 @@ with st.sidebar:
 
 # ── Main header ────────────────────────────────────────
 st.title("Partner Pipeline Intelligence")
+
+with st.expander("How to read Confidence levels", expanded=False):
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        st.markdown("**✅ Confirmed**")
+        st.caption("2+ peer-reviewed papers found, or 1 paper for a completed trial. Results are publicly validated.")
+    with col2:
+        st.markdown("**⚠️ Partial**")
+        st.caption("1 peer-reviewed paper found, but trial is still ongoing. May reflect interim data only.")
+    with col3:
+        st.markdown("**❌ Unverified · ONGOING**")
+        st.caption("Trial is active. No publications yet — expected. Monitor by completion date.")
+    with col4:
+        st.markdown("**❌ Unverified · NOT PUBLISHED**")
+        st.caption("Trial completed but no papers found. Confirm directly with the sponsor — priority flag.")
+    with col5:
+        st.markdown("**❌ Unverified**")
+        st.caption("Trial terminated or withdrawn with no publications. Investigate reason for discontinuation.")
+
 if not search_btn:
     st.info(
         "Enter a sponsor name or keyword in the sidebar and click **Search** to begin.  \n"

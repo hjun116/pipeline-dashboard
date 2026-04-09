@@ -2,13 +2,263 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import date, timedelta
+from io import BytesIO
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+)
+from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 
 st.set_page_config(page_title="Pipeline Dashboard", layout="wide")
+
+# ── PDF 생성 함수 ──────────────────────────────────────
+def generate_pdf(row):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=20*mm,
+        leftMargin=20*mm,
+        topMargin=20*mm,
+        bottomMargin=20*mm,
+    )
+
+    # 색상 정의
+    DARK       = colors.HexColor("#1a1a2e")
+    ACCENT     = colors.HexColor("#0f6e56")
+    LIGHT_GRAY = colors.HexColor("#f5f5f5")
+    MID_GRAY   = colors.HexColor("#888888")
+    RED        = colors.HexColor("#c0392b")
+    AMBER      = colors.HexColor("#d68910")
+    GREEN      = colors.HexColor("#1e8449")
+
+    # 스타일 정의
+    styles = getSampleStyleSheet()
+
+    def style(name, **kwargs):
+        return ParagraphStyle(name, **kwargs)
+
+    s_title    = style("s_title",    fontSize=18, textColor=DARK,
+                       fontName="Helvetica-Bold", spaceAfter=2)
+    s_subtitle = style("s_subtitle", fontSize=10, textColor=MID_GRAY,
+                       fontName="Helvetica", spaceAfter=6)
+    s_section  = style("s_section",  fontSize=11, textColor=ACCENT,
+                       fontName="Helvetica-Bold", spaceBefore=10, spaceAfter=4)
+    s_body     = style("s_body",     fontSize=9,  textColor=DARK,
+                       fontName="Helvetica", spaceAfter=3, leading=14)
+    s_small    = style("s_small",    fontSize=8,  textColor=MID_GRAY,
+                       fontName="Helvetica", spaceAfter=2, leading=12)
+    s_bold     = style("s_bold",     fontSize=9,  textColor=DARK,
+                       fontName="Helvetica-Bold", spaceAfter=3)
+    s_footer   = style("s_footer",   fontSize=7,  textColor=MID_GRAY,
+                       fontName="Helvetica", alignment=TA_CENTER)
+    s_question = style("s_question", fontSize=9,  textColor=DARK,
+                       fontName="Helvetica", spaceAfter=4,
+                       leading=14, leftIndent=10)
+
+    # Confidence 색상 매핑
+    def conf_color(conf):
+        if "Confirmed"  in conf: return GREEN
+        if "Partial"    in conf: return AMBER
+        return RED
+
+    elements = []
+    W = A4[0] - 40*mm  # 유효 너비
+
+    # ── 헤더 ──────────────────────────────────────────
+    drug_name = row.get("Drug") or row.get("NCT#", "")
+    sponsor   = row.get("Lead Sponsor", "")
+    nct       = row.get("NCT#", "")
+    ct_link   = row.get("CT.gov Link", "")
+    gen_date  = date.today().strftime("%Y-%m-%d")
+
+    elements.append(Paragraph(drug_name, s_title))
+    elements.append(Paragraph(
+        f"{sponsor}  ·  {nct}  ·  "
+        f'<a href="{ct_link}" color="#0f6e56">View on CT.gov</a>  ·  '
+        f"Generated {gen_date}",
+        s_subtitle
+    ))
+    elements.append(HRFlowable(width=W, thickness=1.5,
+                                color=ACCENT, spaceAfter=8))
+
+    # ── 섹션 1: Trial Snapshot ─────────────────────────
+    elements.append(Paragraph("Trial Snapshot", s_section))
+
+    snap_data = [
+        ["Field", "Value"],
+        ["NCT#",             nct],
+        ["Lead Sponsor",     row.get("Lead Sponsor", "—")],
+        ["Collaborators",    row.get("Collaborators", "—")],
+        ["Indication",       row.get("Indication", "—")],
+        ["Phase",            row.get("Phase", "—")],
+        ["Status",           row.get("Status", "—")],
+        ["Primary Completion", row.get("Completion") or "—"],
+        ["Trial Title",      row.get("Trial Title", "—")],
+    ]
+
+    snap_table = Table(snap_data, colWidths=[40*mm, W - 40*mm])
+    snap_table.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0),  ACCENT),
+        ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+        ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("FONTSIZE",      (0, 0), (-1, 0),  9),
+        ("BACKGROUND",    (0, 1), (0, -1),  LIGHT_GRAY),
+        ("FONTNAME",      (0, 1), (0, -1),  "Helvetica-Bold"),
+        ("FONTSIZE",      (0, 1), (-1, -1), 9),
+        ("TEXTCOLOR",     (0, 1), (-1, -1), DARK),
+        ("ROWBACKGROUNDS",(0, 2), (-1, -1), [colors.white, LIGHT_GRAY]),
+        ("GRID",          (0, 0), (-1, -1), 0.3, colors.HexColor("#dddddd")),
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 6),
+        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+    ]))
+    elements.append(snap_table)
+    elements.append(Spacer(1, 6))
+
+    # ── 섹션 2: Clinical Evidence Summary ─────────────
+    elements.append(Paragraph("Clinical Evidence Summary", s_section))
+
+    conf       = row.get("Confidence", "—")
+    conf_color_ = conf_color(conf)
+    peer       = row.get("peer_reviewed", [])
+    preprints  = row.get("preprints", [])
+
+    # Confidence 배지
+    conf_data  = [[Paragraph(f"<b>Confidence: {conf}</b>",
+                             ParagraphStyle("c", fontSize=10,
+                                            textColor=conf_color_,
+                                            fontName="Helvetica-Bold"))]]
+    conf_table = Table(conf_data, colWidths=[W])
+    conf_table.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), LIGHT_GRAY),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+        ("TOPPADDING",    (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("ROUNDEDCORNERS", [4]),
+    ]))
+    elements.append(conf_table)
+    elements.append(Spacer(1, 6))
+
+    # 피어리뷰 논문
+    elements.append(Paragraph(
+        f"Peer-reviewed Publications ({len(peer)})", s_bold
+    ))
+    if peer:
+        for i, p in enumerate(peer, 1):
+            title  = p.get("title", "")[:150]
+            source = p.get("source", "")
+            url    = p.get("url", "")
+            elements.append(Paragraph(
+                f'{i}. <a href="{url}" color="#0f6e56">{title}</a> '
+                f'<font color="#888888">[{source}]</font>',
+                s_body
+            ))
+    else:
+        elements.append(Paragraph(
+            "No peer-reviewed publications found.", s_small
+        ))
+
+    # 프리프린트
+    if preprints:
+        elements.append(Spacer(1, 4))
+        elements.append(Paragraph(
+            f"Preprints ({len(preprints)}) — not peer-reviewed, use with caution",
+            ParagraphStyle("s_pre", fontSize=9, textColor=AMBER,
+                           fontName="Helvetica-Bold", spaceAfter=3)
+        ))
+        for i, p in enumerate(preprints, 1):
+            title  = p.get("title", "")[:150]
+            source = p.get("source", "")
+            url    = p.get("url", "")
+            elements.append(Paragraph(
+                f'{i}. <a href="{url}" color="#888888">{title}</a> '
+                f'<font color="#888888">[{source}]</font>',
+                s_small
+            ))
+
+    elements.append(Spacer(1, 6))
+
+    # ── 섹션 3: Key Questions for Meeting ─────────────
+    elements.append(Paragraph("Key Questions for Meeting", s_section))
+
+    questions = []
+    status_raw = row.get("Status_raw", "")
+    n_peer     = len(peer)
+
+    # Confidence 기반 자동 질문 생성
+    if "NOT PUBLISHED" in conf:
+        questions.append(
+            "Trial is marked Completed but no peer-reviewed publications were found. "
+            "What are the primary efficacy and safety outcomes, "
+            "and why have results not been published?"
+        )
+    if "ONGOING" in conf and n_peer == 0:
+        questions.append(
+            "No publications available yet for this ongoing trial. "
+            "What is the current enrollment status, "
+            "and when are interim or top-line results expected?"
+        )
+    if "Partial" in conf:
+        questions.append(
+            "Only partial publication data is available. "
+            "Are there additional data readouts planned, "
+            "and what endpoints remain unreported?"
+        )
+    if "Terminated" in row.get("Status", "") or "Terminated" in status_raw:
+        questions.append(
+            "This trial appears to have been terminated. "
+            "What was the reason for discontinuation, "
+            "and are there plans to restart or modify the program?"
+        )
+    if row.get("Collaborators", "—") != "—":
+        questions.append(
+            f"This trial lists collaborators ({row['Collaborators']}). "
+            "What is the nature of this collaboration — "
+            "co-development, funding, or CRO engagement?"
+        )
+
+    # 공통 질문
+    questions += [
+        "What are the next clinical milestones and expected timelines "
+        "for this program?",
+        "Are there any ongoing or planned combination studies "
+        "involving this asset?",
+        "What is the current competitive landscape, "
+        "and how does this asset differentiate from existing therapies?",
+    ]
+
+    for i, q in enumerate(questions, 1):
+        elements.append(Paragraph(f"{i}.  {q}", s_question))
+
+    # ── 푸터 ──────────────────────────────────────────
+    elements.append(Spacer(1, 10))
+    elements.append(HRFlowable(width=W, thickness=0.5,
+                                color=MID_GRAY, spaceAfter=6))
+    elements.append(Paragraph(
+        "Data sources: ClinicalTrials.gov · PubMed · Europe PMC · "
+        "OpenAlex · bioRxiv / medRxiv  ·  "
+        f"Generated on {gen_date}  ·  "
+        "For internal use only. Not for distribution.",
+        s_footer
+    ))
+
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
 
 # ── Sidebar ────────────────────────────────────────────
 with st.sidebar:
     st.title("Pipeline Dashboard")
-    st.caption("ClinicalTrials.gov · PubMed · Europe PMC · OpenAlex · bioRxiv/medRxiv")
+    st.caption(
+        "ClinicalTrials.gov · PubMed · Europe PMC · "
+        "OpenAlex · bioRxiv/medRxiv"
+    )
     st.divider()
 
     st.subheader("Search")
@@ -28,7 +278,8 @@ with st.sidebar:
     )
     status_filter = st.selectbox(
         "Status",
-        ["All", "RECRUITING", "ACTIVE_NOT_RECRUITING", "COMPLETED", "TERMINATED"]
+        ["All", "RECRUITING", "ACTIVE_NOT_RECRUITING",
+         "COMPLETED", "TERMINATED"]
     )
 
     st.subheader("Date range")
@@ -60,37 +311,46 @@ with st.expander("How to read Confidence levels", expanded=False):
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.markdown("**✅ Confirmed**")
-        st.caption("2+ peer-reviewed papers found, or 1 paper for a completed trial. Results are publicly validated.")
+        st.caption(
+            "2+ peer-reviewed papers found, or 1 paper for a "
+            "completed trial. Results are publicly validated."
+        )
     with col2:
         st.markdown("**⚠️ Partial**")
-        st.caption("1 peer-reviewed paper found, but trial is still ongoing. May reflect interim data only.")
+        st.caption(
+            "1 peer-reviewed paper found, but trial is still ongoing. "
+            "May reflect interim data only."
+        )
     with col3:
         st.markdown("**❌ Unverified · ONGOING**")
-        st.caption("Trial is active. No publications yet — expected. Monitor by completion date.")
+        st.caption(
+            "Trial is active. No publications yet — expected. "
+            "Monitor by completion date."
+        )
     with col4:
         st.markdown("**❌ Unverified · NOT PUBLISHED**")
-        st.caption("Trial completed but no papers found. Confirm directly with the sponsor — priority flag.")
+        st.caption(
+            "Trial completed but no papers found. "
+            "Confirm directly with the sponsor — priority flag."
+        )
     with col5:
         st.markdown("**❌ Unverified**")
-        st.caption("Trial terminated or withdrawn with no publications. Investigate reason for discontinuation.")
+        st.caption(
+            "Trial terminated or withdrawn with no publications. "
+            "Investigate reason for discontinuation."
+        )
 
 if not search_btn:
     st.info(
-        "Enter a sponsor name or keyword in the sidebar and click **Search** to begin.  \n"
-        "**Tip:** If a recently registered investigator-initiated trial is missing, "
-        "try widening the date range in the sidebar."
+        "Enter a sponsor name or keyword in the sidebar and click "
+        "**Search** to begin.  \n"
+        "**Tip:** If a recently registered investigator-initiated trial "
+        "is missing, try widening the date range in the sidebar."
     )
     st.stop()
 
-# ── CT.gov API ─────────────────────────────────────────
+# ── API 함수들 ─────────────────────────────────────────
 def fetch_trials(sponsor, keyword, status, date_from, date_to):
-    """
-    필드별 병렬 쿼리:
-      Sponsor  → query.spons
-      Keyword  → query.term + query.intr + query.cond 병렬
-    날짜 기준: LastUpdatePostDate
-    결과: NCT# 기준 중복 제거 후 합산
-    """
     base_url = "https://clinicaltrials.gov/api/v2/studies"
     base_params = {
         "pageSize": 50,
@@ -109,7 +369,6 @@ def fetch_trials(sponsor, keyword, status, date_from, date_to):
     if status != "All":
         base_params["filter.overallStatus"] = status
 
-    # 쿼리 조합 생성
     query_sets = []
     if sponsor and keyword:
         for kw_field in ["query.term", "query.intr", "query.cond"]:
@@ -120,9 +379,7 @@ def fetch_trials(sponsor, keyword, status, date_from, date_to):
         for kw_field in ["query.term", "query.intr", "query.cond"]:
             query_sets.append({kw_field: keyword})
 
-    # 병렬 쿼리 실행 & NCT# 중복 제거
-    seen_ncts   = set()
-    all_studies = []
+    seen_ncts, all_studies = set(), []
     for q in query_sets:
         params = {**base_params, **q}
         try:
@@ -142,7 +399,6 @@ def fetch_trials(sponsor, keyword, status, date_from, date_to):
             continue
     return all_studies
 
-# ── PubMed ─────────────────────────────────────────────
 def search_pubmed(nct_id):
     try:
         r = requests.get(
@@ -162,11 +418,11 @@ def search_pubmed(nct_id):
         result = r2.json().get("result", {})
         return [
             {
-                "title": result[uid].get("title", ""),
-                "url":   f"https://pubmed.ncbi.nlm.nih.gov/{uid}/",
+                "title":  result[uid].get("title", ""),
+                "url":    f"https://pubmed.ncbi.nlm.nih.gov/{uid}/",
                 "source": "PubMed",
-                "pmid":  uid,
-                "doi":   "",
+                "pmid":   uid,
+                "doi":    "",
                 "is_preprint": False,
             }
             for uid in ids if result.get(uid, {}).get("title")
@@ -174,7 +430,6 @@ def search_pubmed(nct_id):
     except:
         return []
 
-# ── Europe PMC ─────────────────────────────────────────
 def search_europepmc(nct_id):
     try:
         r = requests.get(
@@ -205,9 +460,8 @@ def search_europepmc(nct_id):
     except:
         return []
 
-# ── OpenAlex ───────────────────────────────────────────
 def search_openalex(nct_id):
-    headers = {"User-Agent": "pipeline-dashboard hyesun116@gmail.com"}
+    headers = {"User-Agent": "pipeline-dashboard your@email.com"}
     try:
         r = requests.get(
             "https://api.openalex.org/works",
@@ -250,7 +504,6 @@ def search_openalex(nct_id):
     except:
         return []
 
-# ── bioRxiv / medRxiv ──────────────────────────────────
 def search_biorxiv(nct_id):
     papers = []
     for server in ["biorxiv", "medrxiv"]:
@@ -275,13 +528,7 @@ def search_biorxiv(nct_id):
             continue
     return papers
 
-# ── 중복 제거 통합 ─────────────────────────────────────
 def get_all_papers(nct_id):
-    """
-    우선순위: PubMed → Europe PMC → OpenAlex → bioRxiv/medRxiv
-    중복 제거 키: PMID → DOI → 제목 앞 60자
-    피어리뷰 / 프리프린트 분리 반환
-    """
     all_raw = (
         search_pubmed(nct_id)
         + search_europepmc(nct_id)
@@ -290,31 +537,25 @@ def get_all_papers(nct_id):
     )
     seen_pmids, seen_dois, seen_titles = set(), set(), set()
     peer_reviewed, preprints = [], []
-
     for p in all_raw:
         pmid      = p.get("pmid", "").strip()
         doi       = p.get("doi",  "").strip().lower()
         title_key = p["title"][:60].lower()
-
         if pmid and pmid in seen_pmids:
             continue
         if doi  and doi  in seen_dois:
             continue
         if title_key in seen_titles:
             continue
-
         if pmid:      seen_pmids.add(pmid)
         if doi:       seen_dois.add(doi)
         seen_titles.add(title_key)
-
         if p["is_preprint"]:
             preprints.append(p)
         else:
             peer_reviewed.append(p)
-
     return peer_reviewed, preprints
 
-# ── Confidence scoring ─────────────────────────────────
 def get_confidence(peer_reviewed, status):
     n = len(peer_reviewed)
     if n >= 2 or (n == 1 and status == "COMPLETED"):
@@ -329,7 +570,6 @@ def get_confidence(peer_reviewed, status):
         else:
             return "❌ Unverified"
 
-# ── 포맷 헬퍼 ─────────────────────────────────────────
 def fmt_phase(p):
     icons = {
         "PHASE1": "🔬", "PHASE2": "🧪",
@@ -348,7 +588,6 @@ def fmt_status(s):
     }
     return mapping.get(s.upper(), s)
 
-# ── CT.gov 응답 파싱 ───────────────────────────────────
 def parse_trials(studies):
     rows = []
     for s in studies:
@@ -394,7 +633,6 @@ def parse_trials(studies):
         })
     return rows
 
-# ── Phase 필터 ─────────────────────────────────────────
 def apply_phase_filter(rows, phase):
     if phase == "All":
         return rows
@@ -481,7 +719,7 @@ with tab1:
     st.divider()
     st.subheader("Pipeline Overview")
 
-    max_pubs = max((r["Pubs"] for r in rows), default=1) or 1
+    max_pubs   = max((r["Pubs"] for r in rows), default=1) or 1
     df_display = pd.DataFrame(rows)[[
         "NCT#", "Lead Sponsor", "Collaborators",
         "Drug", "Indication", "Phase", "Status",
@@ -575,3 +813,19 @@ with tab2:
                             f"- [{p['title'][:120]}]({p['url']}) "
                             f"`{p['source']}`"
                         )
+
+                # ── PDF 추출 버튼 ──────────────────────
+                st.write("")
+                st.divider()
+                pdf_buf = generate_pdf(row)
+                filename = (
+                    f"{row['NCT#']}_{(row['Drug'] or 'briefing').replace(' ', '_')}"
+                    f"_briefing.pdf"
+                )
+                st.download_button(
+                    label="Export Briefing PDF",
+                    data=pdf_buf,
+                    file_name=filename,
+                    mime="application/pdf",
+                    key=f"pdf_{row['NCT#']}",
+                )

@@ -17,14 +17,45 @@ st.set_page_config(page_title="Pipeline Dashboard", layout="wide")
 
 # ── PDF 생성 함수 ──────────────────────────────────────
 def generate_pdf(row):
-    buffer = BytesIO()
+    import re
+    buffer  = BytesIO()
+
+    # 마진 상수 — 표 너비 계산에도 동일하게 사용
+    L_MARGIN = 20 * mm
+    R_MARGIN = 20 * mm
+    T_MARGIN = 20 * mm
+    B_MARGIN = 20 * mm   # 푸터 고정 영역 확보를 위해 넉넉하게
+    PW, PH   = A4          # 210mm × 297mm
+    W        = PW - L_MARGIN - R_MARGIN   # 실제 콘텐츠 너비
+
+    # ── 푸터 콜백 (페이지 하단 고정) ────────────────────
+    footer_text = (
+        "Data sources: ClinicalTrials.gov · PubMed · Europe PMC · "
+        "OpenAlex · bioRxiv / medRxiv  ·  For internal use only. Not for distribution."
+    )
+    MID_GRAY_F = colors.HexColor("#888888")
+    ACCENT_F   = colors.HexColor("#0f6e56")
+
+    def draw_footer(canvas, doc):
+        canvas.saveState()
+        # 하단 라인: 상단 초록 라인과 대칭 (bottomMargin 위치)
+        footer_y = B_MARGIN
+        canvas.setStrokeColor(MID_GRAY_F)
+        canvas.setLineWidth(0.5)
+        canvas.line(L_MARGIN, footer_y, PW - R_MARGIN, footer_y)
+        # 텍스트: 라인 아래 6pt
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(MID_GRAY_F)
+        canvas.drawCentredString(PW / 2, footer_y - 10, footer_text)
+        canvas.restoreState()
+
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
-        rightMargin=20 * mm,
-        leftMargin=20 * mm,
-        topMargin=20 * mm,
-        bottomMargin=20 * mm,
+        rightMargin=R_MARGIN,
+        leftMargin=L_MARGIN,
+        topMargin=T_MARGIN,
+        bottomMargin=B_MARGIN + 18,   # 푸터 공간 확보
     )
 
     # 색상 정의
@@ -43,7 +74,6 @@ def generate_pdf(row):
                        fontName="Helvetica-Bold", spaceAfter=0)
     s_subtitle = style("s_subtitle", fontSize=9,  textColor=MID_GRAY,
                        fontName="Helvetica", spaceAfter=4)
-    # ➊ 섹션 헤더: fontSize 13(+2pt), spaceBefore/After 2배 이상
     s_section  = style("s_section",  fontSize=13, textColor=ACCENT,
                        fontName="Helvetica-Bold", spaceBefore=18,
                        spaceAfter=10, leftIndent=0)
@@ -53,26 +83,17 @@ def generate_pdf(row):
                        fontName="Helvetica", spaceAfter=2, leading=12)
     s_bold     = style("s_bold",     fontSize=9,  textColor=DARK,
                        fontName="Helvetica-Bold", spaceAfter=3)
-    s_footer   = style("s_footer",   fontSize=7,  textColor=MID_GRAY,
-                       fontName="Helvetica", alignment=TA_CENTER)
     s_question = style("s_question", fontSize=9,  textColor=DARK,
                        fontName="Helvetica", spaceAfter=8,
                        leading=16, leftIndent=0)
-    s_conf_tag = style("s_conf_tag", fontSize=8,  textColor=MID_GRAY,
-                       fontName="Helvetica", spaceAfter=3, leading=13)
 
     def conf_color(conf):
         if "Confirmed" in conf: return GREEN
         if "Partial"   in conf: return AMBER
         return RED
 
-    # ── Phase / Status 텍스트 정제 (이모지·특수문자 제거) ──
     def clean_phase(raw):
-        """'🔬 PHASE1' → 'Phase 1'"""
-        import re
-        # 이모지 제거
         text = re.sub(r'[^\x00-\x7F]+', '', raw).strip()
-        # PHASE1 → Phase 1
         text = re.sub(
             r'(?i)phase\s*(\d)',
             lambda m: f"Phase {m.group(1)}",
@@ -81,59 +102,54 @@ def generate_pdf(row):
         return text or raw
 
     def clean_status(raw):
-        """'✅ Completed' → 'Completed'"""
-        import re
         return re.sub(r'[^\x00-\x7F]+', '', raw).strip() or raw
 
-    elements = []
-    W = A4[0] - 40 * mm  # 유효 너비
+    elements   = []
+    drug_name  = row.get("Drug") or row.get("NCT#", "")
+    sponsor    = row.get("Lead Sponsor", "")
+    nct        = row.get("NCT#", "")
+    ct_link    = row.get("CT.gov Link", "")
+    gen_date   = date.today().strftime("%Y-%m-%d")
+    conf       = row.get("Confidence", "—")
+    conf_color_= conf_color(conf)
 
     # ── 헤더 ──────────────────────────────────────────
-    drug_name   = row.get("Drug") or row.get("NCT#", "")
-    sponsor     = row.get("Lead Sponsor", "")
-    nct         = row.get("NCT#", "")
-    ct_link     = row.get("CT.gov Link", "")
-    gen_date    = date.today().strftime("%Y-%m-%d")
-    conf        = row.get("Confidence", "—")
-    conf_color_ = conf_color(conf)
-
-    # ➊ 제목 단독 줄
     elements.append(Paragraph(drug_name, s_title))
-    # ➊ Spacer 1.5배 → 12pt (기존 8pt)
     elements.append(Spacer(1, 14))
-
-    # 서브헤드라인
     elements.append(Paragraph(
         f"{sponsor}  ·  {nct}  ·  "
         f'<a href="{ct_link}" color="#0f6e56">View on CT.gov</a>  ·  '
         f"Generated {gen_date}",
         s_subtitle
     ))
+    # HRFlowable width=W → 좌우 마진과 정확히 동일
     elements.append(HRFlowable(
         width=W, thickness=1.5, color=ACCENT, spaceAfter=10
     ))
 
     # ── 섹션 1: Trial Snapshot ─────────────────────────
-    # ➏ s_section leftIndent=0 으로 동일 줄맞춤
     elements.append(Paragraph("Trial Snapshot", s_section))
 
-    # ➋ Phase/Status 정제 + ➍ Trial Title을 NCT# 바로 다음(2번째 행)으로
-    phase_clean  = clean_phase(row.get("Phase", "—"))
+    phase_clean  = clean_phase(row.get("Phase",  "—"))
     status_clean = clean_status(row.get("Status", "—"))
+
+    # 왼쪽 컬럼 44mm, 오른쪽 컬럼 W-44mm → 합계 = W (초록 라인과 동일)
+    COL1 = 44 * mm
+    COL2 = W - COL1
 
     snap_data = [
         ["Field",              "Value"],
         ["NCT#",               nct],
-        ["Trial Title",        row.get("Trial Title", "—")],   # ➍ 2번째
+        ["Trial Title",        row.get("Trial Title", "—")],
         ["Lead Sponsor",       row.get("Lead Sponsor", "—")],
         ["Collaborators",      row.get("Collaborators", "—")],
         ["Indication",         row.get("Indication", "—")],
-        ["Phase",              phase_clean],                    # ➋ 이모지 제거
-        ["Status",             status_clean],                   # ➌ 이모지 제거
+        ["Phase",              phase_clean],
+        ["Status",             status_clean],
         ["Primary Completion", row.get("Completion") or "—"],
     ]
 
-    snap_table = Table(snap_data, colWidths=[44 * mm, W - 44 * mm])
+    snap_table = Table(snap_data, colWidths=[COL1, COL2])
     snap_table.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, 0),  ACCENT),
         ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
@@ -144,8 +160,7 @@ def generate_pdf(row):
         ("FONTSIZE",      (0, 1), (-1, -1), 9),
         ("TEXTCOLOR",     (0, 1), (-1, -1), DARK),
         ("ROWBACKGROUNDS",(0, 2), (-1, -1), [colors.white, LIGHT_GRAY]),
-        ("GRID",          (0, 0), (-1, -1), 0.3,
-         colors.HexColor("#dddddd")),
+        ("GRID",          (0, 0), (-1, -1), 0.3, colors.HexColor("#dddddd")),
         ("TOPPADDING",    (0, 0), (-1, -1), 5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
         ("LEFTPADDING",   (0, 0), (-1, -1), 8),
@@ -161,7 +176,6 @@ def generate_pdf(row):
 
     elements.append(Paragraph("Clinical Evidence Summary", s_section))
 
-    # ➌ Confidence: Peer-reviewed Publications 제목과 같은 줄 인라인
     conf_hex   = conf_color_.hexval()
     peer_label = (
         f"<b>Peer-reviewed Publications ({len(peer)})</b>"
@@ -169,6 +183,7 @@ def generate_pdf(row):
         f'<font color="{conf_hex}" size="8">{conf}</font>'
     )
     elements.append(Paragraph(peer_label, s_bold))
+
     if peer:
         for i, p in enumerate(peer, 1):
             title  = p.get("title", "")[:150]
@@ -184,7 +199,6 @@ def generate_pdf(row):
             "No peer-reviewed publications found.", s_small
         ))
 
-    # 프리프린트
     if preprints:
         elements.append(Spacer(1, 4))
         elements.append(Paragraph(
@@ -205,7 +219,6 @@ def generate_pdf(row):
     elements.append(Spacer(1, 6))
 
     # ── 섹션 3: Key Questions for Meeting ─────────────
-    # ➏ leftIndent=0 으로 동일 줄맞춤
     elements.append(Paragraph("Key Questions for Meeting", s_section))
 
     questions  = []
@@ -256,20 +269,8 @@ def generate_pdf(row):
     for i, q in enumerate(questions, 1):
         elements.append(Paragraph(f"{i}.  {q}", s_question))
 
-    # ── 푸터 ──────────────────────────────────────────
-    elements.append(Spacer(1, 10))
-    elements.append(HRFlowable(
-        width=W, thickness=0.5, color=MID_GRAY, spaceAfter=6
-    ))
-    elements.append(Paragraph(
-        "Data sources: ClinicalTrials.gov · PubMed · Europe PMC · "
-        "OpenAlex · bioRxiv / medRxiv  ·  "
-        f"Generated on {gen_date}  ·  "
-        "For internal use only. Not for distribution.",
-        s_footer
-    ))
-
-    doc.build(elements)
+    # ── 빌드 (푸터 콜백 등록) ─────────────────────────
+    doc.build(elements, onFirstPage=draw_footer, onLaterPages=draw_footer)
     buffer.seek(0)
     return buffer
 

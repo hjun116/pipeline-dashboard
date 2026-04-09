@@ -43,10 +43,10 @@ def generate_pdf(row):
                        fontName="Helvetica-Bold", spaceAfter=0)
     s_subtitle = style("s_subtitle", fontSize=9,  textColor=MID_GRAY,
                        fontName="Helvetica", spaceAfter=4)
-    # ➊ 섹션 헤더: leftIndent=0 명시 → 3개 섹션 동일 왼쪽 정렬
-    s_section  = style("s_section",  fontSize=11, textColor=ACCENT,
-                       fontName="Helvetica-Bold", spaceBefore=12,
-                       spaceAfter=4, leftIndent=0)
+    # ➊ 섹션 헤더: fontSize 13(+2pt), spaceBefore/After 2배 이상
+    s_section  = style("s_section",  fontSize=13, textColor=ACCENT,
+                       fontName="Helvetica-Bold", spaceBefore=18,
+                       spaceAfter=10, leftIndent=0)
     s_body     = style("s_body",     fontSize=9,  textColor=DARK,
                        fontName="Helvetica", spaceAfter=3, leading=14)
     s_small    = style("s_small",    fontSize=8,  textColor=MID_GRAY,
@@ -56,10 +56,10 @@ def generate_pdf(row):
     s_footer   = style("s_footer",   fontSize=7,  textColor=MID_GRAY,
                        fontName="Helvetica", alignment=TA_CENTER)
     s_question = style("s_question", fontSize=9,  textColor=DARK,
-                       fontName="Helvetica", spaceAfter=4,
-                       leading=14, leftIndent=0)
+                       fontName="Helvetica", spaceAfter=8,
+                       leading=16, leftIndent=0)
     s_conf_tag = style("s_conf_tag", fontSize=8,  textColor=MID_GRAY,
-                       fontName="Helvetica", spaceAfter=6, leading=13)
+                       fontName="Helvetica", spaceAfter=3, leading=13)
 
     def conf_color(conf):
         if "Confirmed" in conf: return GREEN
@@ -146,10 +146,10 @@ def generate_pdf(row):
         ("ROWBACKGROUNDS",(0, 2), (-1, -1), [colors.white, LIGHT_GRAY]),
         ("GRID",          (0, 0), (-1, -1), 0.3,
          colors.HexColor("#dddddd")),
-        ("TOPPADDING",    (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING",  (0, 0), (-1, -1), 6),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
         ("VALIGN",        (0, 0), (-1, -1), "TOP"),
     ]))
     elements.append(snap_table)
@@ -159,20 +159,16 @@ def generate_pdf(row):
     peer      = row.get("peer_reviewed", [])
     preprints = row.get("preprints", [])
 
-    # ➏ 섹션 제목 단독 (박스 제거 → 제목만, leftIndent=0 으로 동일 줄맞춤)
     elements.append(Paragraph("Clinical Evidence Summary", s_section))
 
-    # ➄ Confidence: 박스 없이 섹션 제목 바로 아래, Peer-reviewed 위에
-    conf_para = Paragraph(
-        f'<font color="{conf_color_.hexval()}">{conf}</font>',
-        s_conf_tag
+    # ➌ Confidence: Peer-reviewed Publications 제목과 같은 줄 인라인
+    conf_hex   = conf_color_.hexval()
+    peer_label = (
+        f"<b>Peer-reviewed Publications ({len(peer)})</b>"
+        f"&nbsp;&nbsp;&nbsp;"
+        f'<font color="{conf_hex}" size="8">{conf}</font>'
     )
-    elements.append(conf_para)
-
-    # 피어리뷰 논문
-    elements.append(Paragraph(
-        f"Peer-reviewed Publications ({len(peer)})", s_bold
-    ))
+    elements.append(Paragraph(peer_label, s_bold))
     if peer:
         for i, p in enumerate(peer, 1):
             title  = p.get("title", "")[:150]

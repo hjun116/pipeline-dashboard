@@ -340,7 +340,7 @@ with st.expander("How to read Confidence levels", expanded=False):
             "Investigate reason for discontinuation."
         )
 
-if not search_btn:
+if not search_btn and st.session_state.get("results") is None:
     st.info(
         "Enter a sponsor name or keyword in the sidebar and click "
         "**Search** to begin.  \n"

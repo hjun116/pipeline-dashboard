@@ -329,7 +329,7 @@ with st.sidebar:
 
 
 # ── Main header ────────────────────────────────────────
-st.title("Partner Pipeline Intelligence")
+st.title("Clinical Pipeline Tracker")
 
 with st.expander("How to read Confidence levels", expanded=False):
     col1, col2, col3, col4, col5 = st.columns(5)
